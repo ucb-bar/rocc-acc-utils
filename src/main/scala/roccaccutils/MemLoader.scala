@@ -6,14 +6,13 @@ import chisel3._
 import chisel3.util._
 
 import org.chipsalliance.cde.config.{Parameters}
-import freechips.rocketchip.rocket.{TLBConfig}
 import freechips.rocketchip.util.{DecoupledHelper}
 import freechips.rocketchip.rocket.constants.{MemoryOpConstants}
+import roccaccutils.logger._
 
-import L2MemHelperConsts._
-
-class MemLoader(memLoaderQueDepth: Int = 16*4, logger: AccelLogger = DefaultAccelLogger)(implicit p: Parameters) extends Module
-     with MemoryOpConstants {
+class MemLoader(memLoaderQueDepth: Int = 16*4, logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams) extends Module
+     with MemoryOpConstants
+     with HasL2MemHelperParams {
 
   val io = IO(new Bundle {
     val l2helperUser = new L2MemHelperBundle

@@ -8,19 +8,27 @@ import chisel3.util._
 import org.chipsalliance.cde.config.{Parameters}
 import freechips.rocketchip.util.{DecoupledHelper}
 import freechips.rocketchip.diplomacy.{ValName}
+import roccaccutils.logger._
 
-import L2MemHelperConsts._
-
-class MemStreamerBundle()(implicit p: Parameters) extends Bundle {
+class MemStreamerBundle(implicit hp: L2MemHelperParams) extends Bundle {
   val mem_stream = Flipped(new MemLoaderConsumerBundle) //from MemLoader
   val memwrites_in = Decoupled(new WriterBundle) //to MemWriter
 }
 
-trait MemStreamer extends Module {
+trait MemStreamer
+  extends Module
+  with HasL2MemHelperParams {
+
+  // --------------------------
+  // MUST BE DEFINED BY CHILD
+  // --------------------------
+
   val io: MemStreamerBundle
   implicit val p: Parameters
   implicit val valName: ValName = ValName("<MemStreamer>")
-  val logger: AccelLogger
+  val logger: Logger
+
+  // --------------------------
 
   // 1. Receive data from the memloader to load_data_queue
   /* Slice data by the L2 bandwidth (assuming 32 bytes).

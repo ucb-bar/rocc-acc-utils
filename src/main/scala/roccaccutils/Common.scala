@@ -5,8 +5,6 @@ package roccaccutils
 import chisel3._
 import chisel3.util._
 
-import L2MemHelperConsts._
-
 class PtrInfo extends Bundle {
   val ptr = UInt(64.W)
 }
@@ -35,24 +33,24 @@ class DstWithValInfo extends Bundle {
   val cmpval = UInt(64.W)
 }
 
-class WriterBundle extends Bundle {
+class WriterBundle(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val data = UInt(BUS_SZ_BITS.W)
   val validbytes = UInt((BUS_SZ_BYTES_LG2UP + 1).W)
   val end_of_message = Bool()
 }
 
-class LiteralChunk extends Bundle{
+class LiteralChunk(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val chunk_data = UInt(BUS_SZ_BITS.W)
   val chunk_size_bytes = UInt((BUS_SZ_BYTES_LG2UP + 1).W)
   val is_final_chunk = Bool()
 }
 
-class LoadInfoBundle extends Bundle {
+class LoadInfoBundle(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val start_byte = UInt(BUS_SZ_BYTES_LG2UP.W)
   val end_byte = UInt(BUS_SZ_BYTES_LG2UP.W)
 }
 
-class MemLoaderConsumerBundle extends Bundle {
+class MemLoaderConsumerBundle(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val user_consumed_bytes = Input(UInt((BUS_SZ_BYTES_LG2UP + 1).W))
   val available_output_bytes = Output(UInt((BUS_SZ_BYTES_LG2UP + 1).W))
   val output_valid = Output(Bool())

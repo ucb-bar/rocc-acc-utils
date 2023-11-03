@@ -10,29 +10,48 @@ import freechips.rocketchip.rocket.{TLBConfig}
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.rocket.constants.MemoryOpConstants
 import freechips.rocketchip.tilelink._
+import freechips.rocketchip.subsystem.{SystemBusKey}
+import roccaccutils.logger._
 
-abstract class MemStreamerAccel(opcodes: OpcodeSet)(implicit p: Parameters) extends LazyRoCC(
-    opcodes = opcodes, nPTWPorts = 2) {
+abstract class MemStreamerAccel(opcodes: OpcodeSet)(implicit p: Parameters)
+  extends LazyRoCC(opcodes=opcodes, nPTWPorts=2)
+  with HasL2MemHelperParams {
+
+  // --------------------------
+  // MUST BE DEFINED BY CHILD
+  // --------------------------
 
   val tlbConfig: TLBConfig
   val xbarBetweenMem: Boolean
-  val logger: AccelLogger
+  val logger: Logger
+
+  // --------------------------
+
+  implicit val hp: L2MemHelperParams = L2MemHelperParams(p(SystemBusKey).beatBytes * 8)
 
   val roccTLNode = if (xbarBetweenMem) atlNode else tlNode
 
   val l2_memloader =     LazyModule(new L2MemHelper(tlbConfig, printInfo="[memloader]", numOutstandingReqs=32, logger=logger))
-  roccTLNode := TLBuffer.chainNode(1) := l2_memloader.masterNode
+  roccTLNode := TLWidthWidget(BUS_SZ_BYTES) := TLBuffer.chainNode(1) := l2_memloader.masterNode
 
   val l2_memwriter =     LazyModule(new L2MemHelper(tlbConfig, printInfo="[memwriter]", numOutstandingReqs=32, logger=logger))
-  roccTLNode := TLBuffer.chainNode(1) := l2_memwriter.masterNode
+  roccTLNode := TLWidthWidget(BUS_SZ_BYTES) := TLBuffer.chainNode(1) := l2_memwriter.masterNode
 }
 
 abstract class MemStreamerAccelImp(outer: MemStreamerAccel)(implicit p: Parameters)
   extends LazyRoCCModuleImp(outer) with MemoryOpConstants {
 
+  // --------------------------
+  // MUST BE DEFINED BY CHILD
+  // --------------------------
+
   val queueDepth: Int
   val cmd_router: StreamingCommandRouter
   val streamer: MemStreamer
+
+  // --------------------------
+
+  implicit val hp: L2MemHelperParams = outer.hp
 
   io.mem.req.valid := false.B
   io.mem.s1_kill := false.B

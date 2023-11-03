@@ -8,6 +8,7 @@ import chisel3.util._
 import org.chipsalliance.cde.config.{Parameters}
 import freechips.rocketchip.util.DecoupledHelper
 import freechips.rocketchip.tile.{RoCCCommand, RoCCResponse}
+import roccaccutils.logger._
 
 class MemStreamerCmdBundle()(implicit p: Parameters) extends Bundle {
   val rocc_in = Flipped(Decoupled(new RoCCCommand))
@@ -23,9 +24,16 @@ class MemStreamerCmdBundle()(implicit p: Parameters) extends Bundle {
 }
 
 trait StreamingCommandRouter extends Module {
+
+  // --------------------------
+  // MUST BE DEFINED BY CHILD
+  // --------------------------
+
   val io: MemStreamerCmdBundle
   val cmd_queue_depth: Int
   implicit val p: Parameters
+
+  // --------------------------
 
   val FUNCT_SFENCE                        = 0.U
   val FUNCT_SRC_INFO                      = 1.U

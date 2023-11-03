@@ -9,9 +9,12 @@ import org.chipsalliance.cde.config.{Parameters}
 import freechips.rocketchip.rocket.{TLBConfig}
 import freechips.rocketchip.util.{DecoupledHelper}
 import freechips.rocketchip.rocket.constants.{MemoryOpConstants}
+import roccaccutils.logger._
 
-class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true, val logger: AccelLogger = DefaultAccelLogger)
-  (implicit p: Parameters) extends Module with MemoryOpConstants {
+class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true, val logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams)
+  extends Module
+  with MemoryOpConstants
+  with HasL2MemHelperParams {
 
   val io = IO(new Bundle {
     val memwrites_in = Flipped(Decoupled(new WriterBundle))

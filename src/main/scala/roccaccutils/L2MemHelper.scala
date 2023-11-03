@@ -13,53 +13,58 @@ import freechips.rocketchip.util.{DecoupledHelper}
 import freechips.rocketchip.rocket.constants.{MemoryOpConstants}
 import freechips.rocketchip.rocket.{RAS}
 import freechips.rocketchip.tilelink._
+import roccaccutils.logger._
 
-object L2MemHelperConsts {
-  val BUS_SZ_BITS = 256
-  val BUS_SZ_BYTES = BUS_SZ_BITS / 8
-  val BUS_SZ_BYTES_LG2UP = log2Up(BUS_SZ_BYTES)
-  val BUS_BIT_MASK = ((1 << BUS_SZ_BYTES_LG2UP) - 1)
+case class L2MemHelperParams (
+  busBits: Int = 256
+)
+
+trait HasL2MemHelperParams {
+  implicit val hp: L2MemHelperParams
+  def BUS_SZ_BITS = hp.busBits
+  def BUS_SZ_BYTES = BUS_SZ_BITS / 8
+  def BUS_SZ_BYTES_LG2UP = log2Up(BUS_SZ_BYTES)
+  def BUS_BIT_MASK = ((1 << BUS_SZ_BYTES_LG2UP) - 1)
 }
-import L2MemHelperConsts._
 
-class L2ReqInternal extends Bundle {
+class L2ReqInternal(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val addr = UInt()
   val size = UInt()
   val data = UInt(BUS_SZ_BITS.W)
   val cmd = UInt()
 }
 
-class L2RespInternal extends Bundle {
+class L2RespInternal(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val data = UInt(BUS_SZ_BITS.W)
 }
 
-class L2InternalTracking extends Bundle {
+class L2InternalTracking(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val addrindex = UInt(BUS_SZ_BYTES_LG2UP.W)
   val tag = UInt()
 }
 
-class L2MemHelperBundle extends Bundle {
+class L2MemHelperBundle(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val req = Decoupled(new L2ReqInternal)
   val resp = Flipped(Decoupled(new L2RespInternal))
   val no_memops_inflight = Input(Bool())
 }
 
-
-class L2MemHelper(tlbConfig: TLBConfig, printInfo: String = "", numOutstandingReqs: Int = 32, queueRequests: Boolean = true, queueResponses: Boolean = true, printWriteBytes: Boolean = false, logger: AccelLogger = DefaultAccelLogger)(implicit p: Parameters) extends LazyModule {
+class L2MemHelper(tlbConfig: TLBConfig, printInfo: String = "", numOutstandingReqs: Int = 32, queueRequests: Boolean = true, queueResponses: Boolean = true, printWriteBytes: Boolean = false, logger: Logger = DefaultLogger, busBits: Int = 256)(implicit p: Parameters) extends LazyModule {
   val numOutstandingRequestsAllowed = numOutstandingReqs
   val tlTagBits = log2Ceil(numOutstandingRequestsAllowed)
 
-
-  lazy val module = new L2MemHelperModule(this, tlbConfig, printInfo, queueRequests, queueResponses, printWriteBytes)
+  lazy val module = new L2MemHelperModule(this, tlbConfig, printInfo, queueRequests, queueResponses, printWriteBytes, logger, busBits)
   val masterNode = TLClientNode(Seq(TLMasterPortParameters.v1(
     Seq(TLMasterParameters.v1(
       name = printInfo,
       sourceId = IdRange(0, numOutstandingRequestsAllowed))))))
 }
 
-class L2MemHelperModule(outer: L2MemHelper, tlbConfig: TLBConfig, printInfo: String = "", queueRequests: Boolean = true, queueResponses: Boolean = true, printWriteBytes: Boolean = false, logger: AccelLogger = DefaultAccelLogger)(implicit p: Parameters) extends LazyModuleImp(outer)
+class L2MemHelperModule(outer: L2MemHelper, tlbConfig: TLBConfig, printInfo: String = "", queueRequests: Boolean = true, queueResponses: Boolean = true, printWriteBytes: Boolean = false, logger: Logger = DefaultLogger, busBits: Int = 256)(implicit p: Parameters) extends LazyModuleImp(outer)
   with HasCoreParameters
   with MemoryOpConstants {
+
+  implicit val hp: L2MemHelperParams = L2MemHelperParams(busBits)
 
   val io = IO(new Bundle {
     val userif = Flipped(new L2MemHelperBundle)
