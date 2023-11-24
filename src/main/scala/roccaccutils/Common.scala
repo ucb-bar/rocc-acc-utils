@@ -51,7 +51,7 @@ class LoadInfoBundle(implicit val hp: L2MemHelperParams) extends Bundle with Has
 }
 
 class MemLoaderConsumerBundle(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
-  val user_consumed_bytes = Input(UInt((BUS_SZ_BYTES_LG2UP + 1).W))
+  val user_consumed_bytes = Input(UInt((BUS_SZ_BYTES_LG2UP + 1).W)) // amt of bytes read (comb. related to available_output_bytes)
   val available_output_bytes = Output(UInt((BUS_SZ_BYTES_LG2UP + 1).W))
   val output_valid = Output(Bool())
   val output_ready = Input(Bool())

@@ -24,7 +24,10 @@ trait HasL2MemHelperParams {
   def BUS_SZ_BITS = hp.busBits
   def BUS_SZ_BYTES = BUS_SZ_BITS / 8
   def BUS_SZ_BYTES_LG2UP = log2Up(BUS_SZ_BYTES)
-  def BUS_BIT_MASK = ((1 << BUS_SZ_BYTES_LG2UP) - 1)
+
+  def BUS_BIT_MASK = Fill(BUS_SZ_BITS, 1.U)
+  def BUS_BYTE_MASK = Fill(BUS_SZ_BYTES, 1.U)
+  def BUS_BYTE_LG2UP_MASK = Fill(BUS_SZ_BYTES_LG2UP, 1.U)
 }
 
 class L2ReqInternal(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
