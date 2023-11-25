@@ -1,6 +1,6 @@
 // See LICENSE for license details
 
-package roccaccutils
+package roccaccutils.memutils
 
 import chisel3._
 import chisel3.util._
@@ -31,7 +31,7 @@ class StreamInfo extends Bundle {
 //     - user must read out all data for it to not stall
 //
 //   Input given in bus bytes sized chunks, may not be aligned
-class MemLoader(memLoaderQueDepth: Int = 16*4, logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams) extends Module
+class MemLoader(memLoaderQueueDepth: Int = 16*4, logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams) extends Module
      with MemoryOpConstants
      with HasL2MemHelperParams {
 
@@ -58,19 +58,22 @@ class MemLoader(memLoaderQueDepth: Int = 16*4, logger: Logger = DefaultLogger)(i
   val words_to_load = (aligned_loadlen >> BUS_SZ_BYTES_LG2UP.U) + has_extra_word.asUInt
   val words_to_load_minus_one = words_to_load - 1.U
 
-  when (io.src_info.fire()) {
-    logger.logInfo("COMPLETED SRC INPUT LOAD\n")
-    logger.logInfo("  base_addr_bytes: %x\n", base_addr_bytes)
-    logger.logInfo("  base_len: %x\n", base_len)
-    logger.logInfo("  base_addr_start_index: %x\n", base_addr_start_index)
-    logger.logInfo("  aligned_loadlen: %x\n", aligned_loadlen)
-    logger.logInfo("  base_addr_end_index: %x\n", base_addr_end_index)
-    logger.logInfo("  base_addr_end_index_exclusive: %x\n", base_addr_end_index_exclusive)
-    logger.logInfo("  has_extra_word: %x\n", has_extra_word)
-    logger.logInfo("  base_addr_bytes_aligned: %x\n", base_addr_bytes_aligned)
-    logger.logInfo("  words_to_load: %x\n", words_to_load)
-    logger.logInfo("  words_to_load_minus_one: %x\n", words_to_load_minus_one)
-  }
+  LogUtils.logHexItems(
+    io.src_info.fire(),
+    Seq(
+      ("base_addr_bytes", base_addr_bytes),
+      ("base_len", base_len),
+      ("base_addr_start_index", base_addr_start_index),
+      ("aligned_loadlen", aligned_loadlen),
+      ("base_addr_end_index", base_addr_end_index),
+      ("base_addr_end_index_exclusive", base_addr_end_index_exclusive),
+      ("has_extra_word", has_extra_word),
+      ("base_addr_bytes_aligned", base_addr_bytes_aligned),
+      ("words_to_load", words_to_load),
+      ("words_to_load_minus_one", words_to_load_minus_one),
+    ),
+    Some("Completed src_info load"),
+    logger=logger)
 
   val load_info_queue = Module(new Queue(new Bundle {
     val start_byte = UInt(BUS_SZ_BYTES_LG2UP.W) // inclusive
@@ -105,12 +108,16 @@ class MemLoader(memLoaderQueDepth: Int = 16*4, logger: Logger = DefaultLogger)(i
   io.l2helperUser.req.bits.size := BUS_SZ_BYTES_LG2UP.U
   io.l2helperUser.req.bits.data := 0.U
 
-  when (load_info_queue.io.deq.fire) {
-    logger.logInfo("load_info_queue.deq: start %x, end %x, last %x\n",
-      load_info_queue.io.deq.bits.start_byte,
-      load_info_queue.io.deq.bits.end_byte,
-      load_info_queue.io.deq.bits.last)
-  }
+  LogUtils.logHexItems(
+    load_info_queue.io.deq.fire(),
+    Seq(
+      ("start_byte", load_info_queue.io.deq.bits.start_byte),
+      ("end_byte", load_info_queue.io.deq.bits.end_byte),
+      ("last", load_info_queue.io.deq.bits.last),
+    ),
+    Some("load_info_queue.deq"),
+    oneline=true,
+    logger=logger)
 
   val resp_fire = DecoupledHelper(
     io.l2helperUser.resp.valid,
@@ -127,7 +134,7 @@ class MemLoader(memLoaderQueDepth: Int = 16*4, logger: Logger = DefaultLogger)(i
   aligner.io.in.bits.keep := (BUS_BYTE_MASK >> (BUS_SZ_BYTES.U - load_info_queue.io.deq.bits.end_byte)) & (BUS_BYTE_MASK << load_info_queue.io.deq.bits.start_byte)
 
   // store aligned data
-  val aligned_data_queue = Module(new Queue(new StreamChannel(BUS_SZ_BITS), memLoaderQueDepth))
+  val aligned_data_queue = Module(new Queue(new StreamChannel(BUS_SZ_BITS), memLoaderQueueDepth))
   aligned_data_queue.io.enq <> aligner.io.out
 
   // read out data, shifting based on user input

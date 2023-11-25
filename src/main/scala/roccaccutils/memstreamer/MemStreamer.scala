@@ -1,6 +1,6 @@
 // See LICENSE for license details
 
-package roccaccutils
+package roccaccutils.memstreamer
 
 import chisel3._
 import chisel3.util._
@@ -9,6 +9,7 @@ import org.chipsalliance.cde.config.{Parameters}
 import freechips.rocketchip.util.{DecoupledHelper}
 import freechips.rocketchip.diplomacy.{ValName}
 import roccaccutils.logger._
+import roccaccutils.memutils._
 
 class LiteralChunk(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val chunk_data = UInt(BUS_SZ_BITS.W)
@@ -59,21 +60,27 @@ trait MemStreamer
   // API: connect load_data_queue
   // ----------------------------
 
-  when (load_data_queue.io.enq.fire) {
-    logger.logInfo("load_data_q:enq: sz:%x final:%x data:%x\n",
-      load_data_queue.io.enq.bits.chunk_size_bytes,
-      load_data_queue.io.enq.bits.is_final_chunk,
-      load_data_queue.io.enq.bits.chunk_data,
-    )
-  }
+  LogUtils.logHexItems(
+    load_data_queue.io.enq.fire(),
+    Seq(
+      ("sz", load_data_queue.io.enq.bits.chunk_size_bytes),
+      ("final?", load_data_queue.io.enq.bits.is_final_chunk),
+      ("data", load_data_queue.io.enq.bits.chunk_data),
+    ),
+    Some("load_data_q.enq"),
+    oneline=true,
+    logger=logger)
 
-  when (load_data_queue.io.deq.fire) {
-    logger.logInfo("load_data_q:deq: sz:%x final:%x data:%x\n",
-      load_data_queue.io.deq.bits.chunk_size_bytes,
-      load_data_queue.io.deq.bits.is_final_chunk,
-      load_data_queue.io.deq.bits.chunk_data,
-    )
-  }
+  LogUtils.logHexItems(
+    load_data_queue.io.deq.fire(),
+    Seq(
+      ("sz", load_data_queue.io.deq.bits.chunk_size_bytes),
+      ("final?", load_data_queue.io.deq.bits.is_final_chunk),
+      ("data", load_data_queue.io.deq.bits.chunk_data),
+    ),
+    Some("load_data_q.deq"),
+    oneline=true,
+    logger=logger)
 
   // 3. Write data to through the memwriter
 
@@ -96,19 +103,25 @@ trait MemStreamer
   // API: connect store_data_queue
   // -----------------------------
 
-  when (store_data_queue.io.enq.fire) {
-    logger.logInfo("store_data_q:enq: sz:%x final:%x data:%x\n",
-      store_data_queue.io.enq.bits.chunk_size_bytes,
-      store_data_queue.io.enq.bits.is_final_chunk,
-      store_data_queue.io.enq.bits.chunk_data,
-    )
-  }
+  LogUtils.logHexItems(
+    store_data_queue.io.enq.fire(),
+    Seq(
+      ("sz", store_data_queue.io.enq.bits.chunk_size_bytes),
+      ("final?", store_data_queue.io.enq.bits.is_final_chunk),
+      ("data", store_data_queue.io.enq.bits.chunk_data),
+    ),
+    Some("store_data_q.enq"),
+    oneline=true,
+    logger=logger)
 
-  when (store_data_queue.io.deq.fire) {
-    logger.logInfo("store_data_q:deq: sz:%x final:%x data:%x\n",
-      store_data_queue.io.deq.bits.chunk_size_bytes,
-      store_data_queue.io.deq.bits.is_final_chunk,
-      store_data_queue.io.deq.bits.chunk_data,
-    )
-  }
+  LogUtils.logHexItems(
+    store_data_queue.io.deq.fire(),
+    Seq(
+      ("sz", store_data_queue.io.deq.bits.chunk_size_bytes),
+      ("final?", store_data_queue.io.deq.bits.is_final_chunk),
+      ("data", store_data_queue.io.deq.bits.chunk_data),
+    ),
+    Some("store_data_q.deq"),
+    oneline=true,
+    logger=logger)
 }

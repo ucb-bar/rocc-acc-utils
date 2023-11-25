@@ -1,6 +1,6 @@
 // See LICENSE for license details
 
-package roccaccutils
+package roccaccutils.memstreamer
 
 import chisel3._
 import chisel3.util._
@@ -9,6 +9,7 @@ import org.chipsalliance.cde.config.{Parameters}
 import freechips.rocketchip.util.DecoupledHelper
 import freechips.rocketchip.tile.{RoCCCommand, RoCCResponse}
 import roccaccutils.logger._
+import roccaccutils.memutils._
 
 class MemStreamerCmdBundle()(implicit p: Parameters) extends Bundle {
   val rocc_in = Flipped(Decoupled(new RoCCCommand))
@@ -23,7 +24,7 @@ class MemStreamerCmdBundle()(implicit p: Parameters) extends Bundle {
   val no_writes_inflight = Input(Bool()) //from writer unit
 }
 
-trait StreamingCommandRouter extends Module {
+trait MemStreamerCommandRouter extends Module {
 
   // --------------------------
   // MUST BE DEFINED BY CHILD

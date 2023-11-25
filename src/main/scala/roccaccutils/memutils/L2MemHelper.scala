@@ -1,6 +1,6 @@
 // See LICENSE for license details
 
-package roccaccutils
+package roccaccutils.memutils
 
 import chisel3._
 import chisel3.util._

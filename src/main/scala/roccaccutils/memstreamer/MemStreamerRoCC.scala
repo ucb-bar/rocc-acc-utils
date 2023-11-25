@@ -1,6 +1,6 @@
 // See LICENSE for license details
 
-package roccaccutils
+package roccaccutils.memstreamer
 
 import chisel3._
 
@@ -12,8 +12,9 @@ import freechips.rocketchip.rocket.constants.MemoryOpConstants
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.subsystem.{SystemBusKey}
 import roccaccutils.logger._
+import roccaccutils.memutils._
 
-abstract class MemStreamerAccel(opcodes: OpcodeSet)(implicit p: Parameters)
+abstract class MemStreamerRoCC(opcodes: OpcodeSet)(implicit p: Parameters)
   extends LazyRoCC(opcodes=opcodes, nPTWPorts=2)
   with HasL2MemHelperParams {
 
@@ -38,7 +39,7 @@ abstract class MemStreamerAccel(opcodes: OpcodeSet)(implicit p: Parameters)
   roccTLNode := TLWidthWidget(BUS_SZ_BYTES) := TLBuffer.chainNode(1) := l2_memwriter.masterNode
 }
 
-abstract class MemStreamerAccelImp(outer: MemStreamerAccel)(implicit p: Parameters)
+abstract class MemStreamerRoCCImp(outer: MemStreamerRoCC)(implicit p: Parameters)
   extends LazyRoCCModuleImp(outer) with MemoryOpConstants {
 
   // --------------------------
@@ -46,7 +47,7 @@ abstract class MemStreamerAccelImp(outer: MemStreamerAccel)(implicit p: Paramete
   // --------------------------
 
   val queueDepth: Int
-  val cmd_router: StreamingCommandRouter
+  val cmd_router: MemStreamerCommandRouter
   val streamer: MemStreamer
 
   // --------------------------
@@ -60,11 +61,11 @@ abstract class MemStreamerAccelImp(outer: MemStreamerAccel)(implicit p: Paramete
   io.interrupt := false.B
   io.busy := false.B
 
-  val memloader = Module(new MemLoader(memLoaderQueDepth=queueDepth, logger=outer.logger))
+  val memloader = Module(new MemLoader(memLoaderQueueDepth=queueDepth, logger=outer.logger))
   outer.l2_memloader.module.io.userif <> memloader.io.l2helperUser
   memloader.io.src_info <> cmd_router.io.src_info
 
-  val memwriter = Module(new MemWriter32(cmd_que_depth=queueDepth, logger=outer.logger))
+  val memwriter = Module(new MemWriter(cmdQueueDepth=queueDepth, logger=outer.logger))
   outer.l2_memwriter.module.io.userif <> memwriter.io.l2io
 
   outer.l2_memloader.module.io.sfence <> cmd_router.io.sfence_out

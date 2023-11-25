@@ -1,6 +1,6 @@
 // See LICENSE for license details
 
-package roccaccutils
+package roccaccutils.memutils
 
 import chisel3._
 import chisel3.util._
@@ -22,7 +22,7 @@ class DstInfo extends Bundle {
   val cmpflag = UInt(64.W)
 }
 
-class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true, val logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams)
+class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, val logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams)
   extends Module
   with MemoryOpConstants
   with HasL2MemHelperParams {
@@ -36,27 +36,34 @@ class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true,
     val no_writes_inflight = Output(Bool())
   })
 
-  val incoming_writes_Q = Module(new Queue(new WriterBundle, cmd_que_depth))
+  val incoming_writes_Q = Module(new Queue(new WriterBundle, cmdQueueDepth))
 
   incoming_writes_Q.io.enq <> io.memwrites_in
 
-  val dest_info_Q = Module(new Queue(new DstInfo, cmd_que_depth))
+  val dest_info_Q = Module(new Queue(new DstInfo, cmdQueueDepth))
   dest_info_Q.io.enq <> io.dest_info
 
   val dest_last_fire = RegNext(dest_info_Q.io.deq.fire)
   val dest_last_valid = RegNext(dest_info_Q.io.deq.valid)
   val dest_printhelp = dest_info_Q.io.deq.valid && (dest_last_fire || (!dest_last_valid))
 
-  when (dest_printhelp) {
-    logger.logInfo("[config-memwriter] got dest info op: 0x%x, cmpflag 0x%x\n",
-      dest_info_Q.io.deq.bits.op,
-      dest_info_Q.io.deq.bits.cmpflag)
-  }
+  LogUtils.logHexItems(
+    dest_printhelp,
+    Seq(
+      ("op", dest_info_Q.io.deq.bits.op),
+      ("cmpflag", dest_info_Q.io.deq.bits.cmpflag),
+    ),
+    Some("dest_info_q.deq"),
+    oneline=true)
 
   val buf_lens_Q = Module(new Queue(UInt(64.W), 10))
-  when (buf_lens_Q.io.enq.fire) {
-    logger.logInfo("[memwriter-serializer] enqueued buf len: %d\n", buf_lens_Q.io.enq.bits)
-  }
+  LogUtils.logHexItems(
+    buf_lens_Q.io.enq.fire,
+    Seq(
+      ("buf_len", buf_lens_Q.io.enq.bits)
+    ),
+    Some("buf_lens_q.enq"),
+    oneline=true)
 
   val buf_len_tracker = RegInit(0.U(64.W))
   when (incoming_writes_Q.io.deq.fire) {
@@ -67,13 +74,15 @@ class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true,
     }
   }
 
-  when (incoming_writes_Q.io.deq.fire) {
-    logger.logInfo("[memwriter-serializer] dat: 0x%x, bytes: 0x%x, EOM: %d\n",
-      incoming_writes_Q.io.deq.bits.data,
-      incoming_writes_Q.io.deq.bits.validbytes,
-      incoming_writes_Q.io.deq.bits.end_of_message
-      )
-  }
+  LogUtils.logHexItems(
+    incoming_writes_Q.io.deq.fire,
+    Seq(
+      ("validbytes", incoming_writes_Q.io.deq.bits.validbytes),
+      ("EOM", incoming_writes_Q.io.deq.bits.end_of_message),
+      ("data", incoming_writes_Q.io.deq.bits.data),
+    ),
+    Some("incoming_writes_q.deq"),
+    oneline=true)
 
   val NUM_QUEUES = 32
   val QUEUE_DEPTHS = 16
@@ -255,7 +264,7 @@ class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true,
   }
 
   val bool_val = 1.U
-  if (write_cmp_flag) {
+  if (writeCmpFlag) {
     io.l2io.req.valid := mem_write_fire.fire(io.l2io.req.ready) || bool_ptr_write_fire.fire(io.l2io.req.ready)
   } else {
     io.l2io.req.valid := mem_write_fire.fire(io.l2io.req.ready)
@@ -278,17 +287,26 @@ class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true,
   when (bool_ptr_write_fire.fire()) {
     bufs_completed := bufs_completed + 1.U
     backend_bytes_written := 0.U
-    logger.logInfo("[memwriter-serializer] write cmpflag addr: 0x%x, write ptr val 0x%x\n", dest_info_Q.io.deq.bits.cmpflag, bool_val)
   }
 
-  when (count_valids =/= 0.U) {
-    logger.logInfo("[memwriter-serializer] write_start_index %d, backend_bytes_written %d, count_valids %d, ptr_align_max_bytes_writeable %d, bytes_to_write %d, bytes_to_write_log2 %d\n",
-      read_start_index,
-      backend_bytes_written,
-      count_valids,
-      ptr_align_max_bytes_writeable,
-      bytes_to_write,
-      bytes_to_write_log2
-    )
-  }
+  LogUtils.logHexItems(
+    bool_ptr_write_fire.fire,
+    Seq(
+      ("write_cmpflag", dest_info_Q.io.deq.bits.cmpflag),
+      ("write_ptr", bool_val),
+    ),
+    Some("dest_info_q.deq"),
+    oneline=true)
+
+  LogUtils.logHexItems(
+    (count_valids =/= 0.U),
+    Seq(
+      ("write_start_index", read_start_index),
+      ("backend_bytes_written", backend_bytes_written),
+      ("count_valids", count_valids),
+      ("ptr_align_max_bytes_writeable", ptr_align_max_bytes_writeable),
+      ("bytes_to_write", bytes_to_write),
+      ("bytes_to_write_log2", bytes_to_write_log2),
+    ),
+    Some("memwriter-serializer"))
 }
