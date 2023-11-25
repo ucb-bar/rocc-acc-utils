@@ -82,7 +82,7 @@ abstract class MemStreamerAccelImp(outer: MemStreamerAccel)(implicit p: Paramete
 
   streamer.io.mem_stream <> memloader.io.consumer
   memwriter.io.memwrites_in <> streamer.io.memwrites_in
-  memwriter.io.decompress_dest_info <> cmd_router.io.dest_info
+  memwriter.io.dest_info <> cmd_router.io.dest_info
   cmd_router.io.bufs_completed := memwriter.io.bufs_completed
   cmd_router.io.no_writes_inflight := memwriter.io.no_writes_inflight
 }

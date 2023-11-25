@@ -10,6 +10,12 @@ import freechips.rocketchip.util.{DecoupledHelper}
 import freechips.rocketchip.diplomacy.{ValName}
 import roccaccutils.logger._
 
+class LiteralChunk(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
+  val chunk_data = UInt(BUS_SZ_BITS.W)
+  val chunk_size_bytes = UInt((BUS_SZ_BYTES_LG2UP + 1).W)
+  val is_final_chunk = Bool()
+}
+
 class MemStreamerBundle(implicit hp: L2MemHelperParams) extends Bundle {
   val mem_stream = Flipped(new MemLoaderConsumerBundle) //from MemLoader
   val memwrites_in = Decoupled(new WriterBundle) //to MemWriter

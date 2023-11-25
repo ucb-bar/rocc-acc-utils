@@ -11,6 +11,17 @@ import freechips.rocketchip.util.{DecoupledHelper}
 import freechips.rocketchip.rocket.constants.{MemoryOpConstants}
 import roccaccutils.logger._
 
+class WriterBundle(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
+  val data = UInt(BUS_SZ_BITS.W)
+  val validbytes = UInt((BUS_SZ_BYTES_LG2UP + 1).W)
+  val end_of_message = Bool()
+}
+
+class DstInfo extends Bundle {
+  val op = UInt(64.W)
+  val cmpflag = UInt(64.W)
+}
+
 class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true, val logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams)
   extends Module
   with MemoryOpConstants
@@ -19,7 +30,7 @@ class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true,
   val io = IO(new Bundle {
     val memwrites_in = Flipped(Decoupled(new WriterBundle))
     val l2io = new L2MemHelperBundle
-    val decompress_dest_info = Flipped(Decoupled(new DstInfo))
+    val dest_info = Flipped(Decoupled(new DstInfo))
 
     val bufs_completed = Output(UInt(64.W))
     val no_writes_inflight = Output(Bool())
@@ -29,17 +40,17 @@ class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true,
 
   incoming_writes_Q.io.enq <> io.memwrites_in
 
-  val decompress_dest_info_Q = Module(new Queue(new DstInfo, cmd_que_depth))
-  decompress_dest_info_Q.io.enq <> io.decompress_dest_info
+  val dest_info_Q = Module(new Queue(new DstInfo, cmd_que_depth))
+  dest_info_Q.io.enq <> io.dest_info
 
-  val decompress_dest_last_fire = RegNext(decompress_dest_info_Q.io.deq.fire)
-  val decompress_dest_last_valid = RegNext(decompress_dest_info_Q.io.deq.valid)
-  val decompress_dest_printhelp = decompress_dest_info_Q.io.deq.valid && (decompress_dest_last_fire || (!decompress_dest_last_valid))
+  val dest_last_fire = RegNext(dest_info_Q.io.deq.fire)
+  val dest_last_valid = RegNext(dest_info_Q.io.deq.valid)
+  val dest_printhelp = dest_info_Q.io.deq.valid && (dest_last_fire || (!dest_last_valid))
 
-  when (decompress_dest_printhelp) {
+  when (dest_printhelp) {
     logger.logInfo("[config-memwriter] got dest info op: 0x%x, cmpflag 0x%x\n",
-      decompress_dest_info_Q.io.deq.bits.op,
-      decompress_dest_info_Q.io.deq.bits.cmpflag)
+      dest_info_Q.io.deq.bits.op,
+      dest_info_Q.io.deq.bits.cmpflag)
   }
 
   val buf_lens_Q = Module(new Queue(UInt(64.W), 10))
@@ -138,7 +149,7 @@ class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true,
   val count_valids = remapVecValids.map(_.asUInt).reduce(_ +& _)
 
   val backend_bytes_written = RegInit(0.U(64.W))
-  val backend_next_write_addr = decompress_dest_info_Q.io.deq.bits.op + backend_bytes_written
+  val backend_next_write_addr = dest_info_Q.io.deq.bits.op + backend_bytes_written
 
   val throttle_end = Mux(buf_lens_Q.io.deq.valid,
     buf_lens_Q.io.deq.bits - backend_bytes_written,
@@ -219,14 +230,14 @@ class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true,
     io.l2io.req.ready,
     enough_data,
     !write_ptr_override,
-    decompress_dest_info_Q.io.deq.valid
+    dest_info_Q.io.deq.valid
   )
 
   val bool_ptr_write_fire = DecoupledHelper(
     io.l2io.req.ready,
     buf_lens_Q.io.deq.valid,
     buf_lens_Q.io.deq.bits === backend_bytes_written,
-    decompress_dest_info_Q.io.deq.valid
+    dest_info_Q.io.deq.valid
   )
 
   for (queueno <- 0 until NUM_QUEUES) {
@@ -250,12 +261,12 @@ class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true,
     io.l2io.req.valid := mem_write_fire.fire(io.l2io.req.ready)
   }
   io.l2io.req.bits.size := Mux(write_ptr_override, 0.U, bytes_to_write_log2)
-  io.l2io.req.bits.addr := Mux(write_ptr_override, decompress_dest_info_Q.io.deq.bits.cmpflag, backend_next_write_addr)
+  io.l2io.req.bits.addr := Mux(write_ptr_override, dest_info_Q.io.deq.bits.cmpflag, backend_next_write_addr)
   io.l2io.req.bits.data := Mux(write_ptr_override, bool_val, remapped_write_data)
   io.l2io.req.bits.cmd := M_XWR
 
   buf_lens_Q.io.deq.ready := bool_ptr_write_fire.fire(buf_lens_Q.io.deq.valid)
-  decompress_dest_info_Q.io.deq.ready := bool_ptr_write_fire.fire(decompress_dest_info_Q.io.deq.valid)
+  dest_info_Q.io.deq.ready := bool_ptr_write_fire.fire(dest_info_Q.io.deq.valid)
 
   val bufs_completed = RegInit(0.U(64.W))
   io.bufs_completed := bufs_completed
@@ -267,7 +278,7 @@ class MemWriter32(val cmd_que_depth: Int = 4, val write_cmp_flag:Boolean = true,
   when (bool_ptr_write_fire.fire()) {
     bufs_completed := bufs_completed + 1.U
     backend_bytes_written := 0.U
-    logger.logInfo("[memwriter-serializer] write cmpflag addr: 0x%x, write ptr val 0x%x\n", decompress_dest_info_Q.io.deq.bits.cmpflag, bool_val)
+    logger.logInfo("[memwriter-serializer] write cmpflag addr: 0x%x, write ptr val 0x%x\n", dest_info_Q.io.deq.bits.cmpflag, bool_val)
   }
 
   when (count_valids =/= 0.U) {
