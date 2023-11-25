@@ -21,7 +21,7 @@ class MemLoaderConsumerBundle(implicit val hp: L2MemHelperParams) extends Bundle
 }
 
 class StreamInfo extends Bundle {
-  val ip = UInt(64.W)
+  val ip = UInt(64.W) // input pointer
   val isize = UInt(64.W)
 }
 
@@ -36,7 +36,8 @@ class MemLoader(memLoaderQueueDepth: Int = 16*4, logger: Logger = DefaultLogger)
      with HasL2MemHelperParams {
 
   val io = IO(new Bundle {
-    val l2helperUser = new L2MemHelperBundle
+    val l2io = new L2MemHelperBundle
+
     val src_info = Flipped(Decoupled(new StreamInfo))
     val consumer = new MemLoaderConsumerBundle
   })
@@ -82,7 +83,7 @@ class MemLoader(memLoaderQueueDepth: Int = 16*4, logger: Logger = DefaultLogger)
   }, 256)) // arb. size
 
   val req_fire = DecoupledHelper(
-    io.l2helperUser.req.ready,
+    io.l2io.req.ready,
     io.src_info.valid,
     load_info_queue.io.enq.ready
   )
@@ -102,11 +103,11 @@ class MemLoader(memLoaderQueueDepth: Int = 16*4, logger: Logger = DefaultLogger)
   load_info_queue.io.enq.bits.end_byte := Mux(is_last_word, base_addr_end_index_exclusive, BUS_SZ_BYTES.U)
   load_info_queue.io.enq.bits.last := req_fire.fire() && is_last_word
 
-  io.l2helperUser.req.valid := req_fire.fire(io.l2helperUser.req.ready)
-  io.l2helperUser.req.bits.addr := (base_addr_bytes_aligned) + (addrinc << BUS_SZ_BYTES_LG2UP)
-  io.l2helperUser.req.bits.cmd := M_XRD
-  io.l2helperUser.req.bits.size := BUS_SZ_BYTES_LG2UP.U
-  io.l2helperUser.req.bits.data := 0.U
+  io.l2io.req.valid := req_fire.fire(io.l2io.req.ready)
+  io.l2io.req.bits.addr := (base_addr_bytes_aligned) + (addrinc << BUS_SZ_BYTES_LG2UP)
+  io.l2io.req.bits.cmd := M_XRD
+  io.l2io.req.bits.size := BUS_SZ_BYTES_LG2UP.U
+  io.l2io.req.bits.data := 0.U
 
   LogUtils.logHexItems(
     load_info_queue.io.deq.fire(),
@@ -120,16 +121,16 @@ class MemLoader(memLoaderQueueDepth: Int = 16*4, logger: Logger = DefaultLogger)
     logger=logger)
 
   val resp_fire = DecoupledHelper(
-    io.l2helperUser.resp.valid,
+    io.l2io.resp.valid,
     load_info_queue.io.deq.valid
   )
   load_info_queue.io.deq.ready := resp_fire.fire(load_info_queue.io.deq.valid)
-  io.l2helperUser.resp.ready := resp_fire.fire(io.l2helperUser.resp.valid)
+  io.l2io.resp.ready := resp_fire.fire(io.l2io.resp.valid)
 
   // align data
   val aligner = Module(new Aligner(BUS_SZ_BITS))
   aligner.io.in.valid := resp_fire.fire()
-  aligner.io.in.bits.data := io.l2helperUser.resp.bits.data
+  aligner.io.in.bits.data := io.l2io.resp.bits.data
   aligner.io.in.bits.last := load_info_queue.io.deq.bits.last
   aligner.io.in.bits.keep := (BUS_BYTE_MASK >> (BUS_SZ_BYTES.U - load_info_queue.io.deq.bits.end_byte)) & (BUS_BYTE_MASK << load_info_queue.io.deq.bits.start_byte)
 

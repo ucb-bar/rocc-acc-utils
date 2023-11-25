@@ -18,8 +18,8 @@ class WriterBundle(implicit val hp: L2MemHelperParams) extends Bundle with HasL2
 }
 
 class DstInfo extends Bundle {
-  val op = UInt(64.W)
-  val cmpflag = UInt(64.W)
+  val op = UInt(64.W) // output pointer for streaming mem data
+  val cmpflag = UInt(64.W) // output pointer for completion flag
 }
 
 class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, val logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams)
@@ -28,8 +28,9 @@ class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, va
   with HasL2MemHelperParams {
 
   val io = IO(new Bundle {
-    val memwrites_in = Flipped(Decoupled(new WriterBundle))
     val l2io = new L2MemHelperBundle
+
+    val memwrites_in = Flipped(Decoupled(new WriterBundle))
     val dest_info = Flipped(Decoupled(new DstInfo))
 
     val bufs_completed = Output(UInt(64.W))
@@ -37,7 +38,6 @@ class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, va
   })
 
   val incoming_writes_Q = Module(new Queue(new WriterBundle, cmdQueueDepth))
-
   incoming_writes_Q.io.enq <> io.memwrites_in
 
   val dest_info_Q = Module(new Queue(new DstInfo, cmdQueueDepth))
@@ -162,53 +162,24 @@ class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, va
 
   val throttle_end = Mux(buf_lens_Q.io.deq.valid,
     buf_lens_Q.io.deq.bits - backend_bytes_written,
-    32.U)
+    BUS_SZ_BYTES.U)
 
-  val throttle_end_writeable = Mux(throttle_end >= 32.U, 32.U,
-                                    Mux(throttle_end(4), 16.U,
-                                      Mux(throttle_end(3), 8.U,
-                                        Mux(throttle_end(2), 4.U,
-                                          Mux(throttle_end(1), 2.U,
-                                            Mux(throttle_end(0), 1.U,
-                                                                  0.U))))))
+  val throttle_end_writeable_meta = Seq((throttle_end >= BUS_SZ_BYTES.U) -> BUS_SZ_BYTES.U) ++
+    (0 until BUS_SZ_BYTES_LG2UP).map(i => throttle_end(i) -> scala.math.pow(2,i).asInt.U).reverse
+  val throttle_end_writeable_meta_log2 = Seq((throttle_end >= BUS_SZ_BYTES.U) -> BUS_SZ_BYTES_LG2UP.U) ++
+    (0 until BUS_SZ_BYTES_LG2UP).map(i => throttle_end(i) -> i.U).reverse
+  val throttle_end_writeable = MuxCase(0.U, throttle_end_writeable_meta)
+  val throttle_end_writeable_log2 = MuxCase(0.U, throttle_end_writeable_meta_log2)
 
-  val throttle_end_writeable_log2 = Mux(throttle_end >= 32.U, 5.U,
-                                      Mux(throttle_end(4), 4.U,
-                                        Mux(throttle_end(3), 3.U,
-                                          Mux(throttle_end(2), 2.U,
-                                            Mux(throttle_end(1), 1.U,
-                                              Mux(throttle_end(0), 0.U,
-                                                                    0.U))))))
+  val ptr_align_max_bytes_writable_meta = (0 until BUS_SZ_BYTES_LG2UP).map(i => backend_next_write_addr(i) -> scala.math.pow(2,i).asInt.U)
+  val ptr_align_max_bytes_writable_meta_log2 = (0 until BUS_SZ_BYTES_LG2UP).map(i => backend_next_write_addr(i) -> i.U)
+  val ptr_align_max_bytes_writeable = MuxCase(BUS_SZ_BYTES.U, ptr_align_max_bytes_writable_meta)
+  val ptr_align_max_bytes_writeable_log2 = MuxCase(BUS_SZ_BYTES_LG2UP.U, ptr_align_max_bytes_writable_meta_log2)
 
-  val ptr_align_max_bytes_writeable = Mux(backend_next_write_addr(0), 1.U,
-                                        Mux(backend_next_write_addr(1), 2.U,
-                                          Mux(backend_next_write_addr(2), 4.U,
-                                            Mux(backend_next_write_addr(3), 8.U,
-                                              Mux(backend_next_write_addr(4), 16.U,
-                                                                                 32.U)))))
-
-  val ptr_align_max_bytes_writeable_log2 = Mux(backend_next_write_addr(0), 0.U,
-                                            Mux(backend_next_write_addr(1), 1.U,
-                                              Mux(backend_next_write_addr(2), 2.U,
-                                                Mux(backend_next_write_addr(3), 3.U,
-                                                  Mux(backend_next_write_addr(4), 4.U,
-                                                                                     5.U)))))
-
-  val count_valids_largest_aligned = Mux(count_valids(5), 32.U,
-                                      Mux(count_valids(4), 16.U,
-                                        Mux(count_valids(3), 8.U,
-                                          Mux(count_valids(2), 4.U,
-                                            Mux(count_valids(1), 2.U,
-                                              Mux(count_valids(0), 1.U,
-                                                                    0.U))))))
-
-  val count_valids_largest_aligned_log2 = Mux(count_valids(5), 5.U,
-                                            Mux(count_valids(4), 4.U,
-                                              Mux(count_valids(3), 3.U,
-                                                Mux(count_valids(2), 2.U,
-                                                  Mux(count_valids(1), 1.U,
-                                                    Mux(count_valids(0), 0.U,
-                                                                           0.U))))))
+  val count_valid_meta = (0 to BUS_SZ_BYTES_LG2UP).map(i => count_valid(i) -> scala.math.pow(2,i).asInt.U).reverse
+  val count_valid_meta_log2 = (0 to BUS_SZ_BYTES_LG2UP).map(i => count_valid(i) -> i.U).reverse
+  val count_valids_largest_aligned = MuxCase(0.U, cound_valid_meta)
+  val count_valids_largest_aligned_log2 = MuxCase(0.U, cound_valid_meta_log2)
 
   val bytes_to_write = Mux(
     ptr_align_max_bytes_writeable < count_valids_largest_aligned,
@@ -219,10 +190,6 @@ class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, va
       count_valids_largest_aligned,
       throttle_end_writeable)
   )
-  val remapped_write_data = Cat(remapVecData.reverse) // >> ((NUM_QUEUES.U - bytes_to_write) << 3)
-
-  val enough_data = bytes_to_write =/= 0.U
-
   val bytes_to_write_log2 = Mux(
     ptr_align_max_bytes_writeable_log2 < count_valids_largest_aligned_log2,
     Mux(ptr_align_max_bytes_writeable_log2 < throttle_end_writeable_log2,
@@ -233,12 +200,14 @@ class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, va
       throttle_end_writeable_log2)
   )
 
-  val write_ptr_override = buf_lens_Q.io.deq.valid && (buf_lens_Q.io.deq.bits === backend_bytes_written)
+  val enough_data = bytes_to_write =/= 0.U
+
+  val done_writing_stream = buf_lens_Q.io.deq.valid && (buf_lens_Q.io.deq.bits === backend_bytes_written)
 
   val mem_write_fire = DecoupledHelper(
     io.l2io.req.ready,
     enough_data,
-    !write_ptr_override,
+    !done_writing_stream,
     dest_info_Q.io.deq.valid
   )
 
@@ -256,23 +225,30 @@ class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, va
   when (mem_write_fire.fire()) {
     read_start_index := (read_start_index +& bytes_to_write) % NUM_QUEUES.U
     backend_bytes_written := backend_bytes_written + bytes_to_write
-    logger.logInfo("[memwriter-serializer] writefire: addr: 0x%x, data 0x%x, size %d\n",
-      io.l2io.req.bits.addr,
-      io.l2io.req.bits.data,
-      io.l2io.req.bits.size
-    )
+
   }
 
-  val bool_val = 1.U
+  val remapped_write_data = Cat(remapVecData.reverse) // >> ((NUM_QUEUES.U - bytes_to_write) << 3)
+
   if (writeCmpFlag) {
     io.l2io.req.valid := mem_write_fire.fire(io.l2io.req.ready) || bool_ptr_write_fire.fire(io.l2io.req.ready)
   } else {
     io.l2io.req.valid := mem_write_fire.fire(io.l2io.req.ready)
   }
-  io.l2io.req.bits.size := Mux(write_ptr_override, 0.U, bytes_to_write_log2)
-  io.l2io.req.bits.addr := Mux(write_ptr_override, dest_info_Q.io.deq.bits.cmpflag, backend_next_write_addr)
-  io.l2io.req.bits.data := Mux(write_ptr_override, bool_val, remapped_write_data)
+  io.l2io.req.bits.size := Mux(done_writing_stream, 0.U, bytes_to_write_log2)
+  io.l2io.req.bits.addr := Mux(done_writing_stream, dest_info_Q.io.deq.bits.cmpflag, backend_next_write_addr)
+  io.l2io.req.bits.data := Mux(done_writing_stream, 1.U, remapped_write_data)
   io.l2io.req.bits.cmd := M_XWR
+
+  LogUtils.logHexItems(
+    io.l2io.req.fire,
+    Seq(
+      ("addr", io.l2io.req.bits.addr),
+      ("size", io.l2io.req.bits.size),
+      ("data", io.l2io.req.bits.data),
+    ),
+    Some("L2IO write fire"),
+    oneline=true)
 
   buf_lens_Q.io.deq.ready := bool_ptr_write_fire.fire(buf_lens_Q.io.deq.valid)
   dest_info_Q.io.deq.ready := bool_ptr_write_fire.fire(dest_info_Q.io.deq.valid)
@@ -293,7 +269,7 @@ class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, va
     bool_ptr_write_fire.fire,
     Seq(
       ("write_cmpflag", dest_info_Q.io.deq.bits.cmpflag),
-      ("write_ptr", bool_val),
+      ("write_ptr", dest_info_Q.io.deq.bits.op),
     ),
     Some("dest_info_q.deq"),
     oneline=true)
