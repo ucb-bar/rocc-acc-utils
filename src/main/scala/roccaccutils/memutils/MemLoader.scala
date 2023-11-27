@@ -9,7 +9,6 @@ import org.chipsalliance.cde.config.{Parameters}
 import freechips.rocketchip.util.{DecoupledHelper}
 import freechips.rocketchip.rocket.constants.{MemoryOpConstants}
 import roccaccutils.logger._
-import icenet.{Aligner, StreamChannel}
 
 class MemLoaderConsumerBundle(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val user_consumed_bytes = Input(UInt((BUS_SZ_BYTES_LG2UP + 1).W)) // amt of bytes read (comb. related to available_output_bytes)

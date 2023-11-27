@@ -8,7 +8,6 @@ import chisel3.util._
 import org.chipsalliance.cde.config.{Parameters, Config}
 import freechips.rocketchip.unittest.{UnitTest, UnitTests}
 import freechips.rocketchip.system.{BaseConfig}
-import icenet.{StreamChannel}
 
 /**
  * Modified ring buffer with the following properties:
