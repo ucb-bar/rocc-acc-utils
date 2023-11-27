@@ -41,6 +41,7 @@ trait MemStreamer
 
   val load_data_queue = Module(new Queue(new LiteralChunk, 5))
   dontTouch(load_data_queue.io.count)
+
   load_data_queue.io.enq.bits.chunk_data := io.mem_stream.output_data
   load_data_queue.io.enq.bits.chunk_size_bytes := io.mem_stream.available_output_bytes
   load_data_queue.io.enq.bits.is_final_chunk := io.mem_stream.output_last_chunk
@@ -81,14 +82,8 @@ trait MemStreamer
   val store_data_queue = Module(new Queue(new LiteralChunk, 5))
   dontTouch(store_data_queue.io.count)
 
-  val sdq_chunk_size = store_data_queue.io.deq.bits.chunk_size_bytes
-  val sdq_chunk_data = store_data_queue.io.deq.bits.chunk_data
-  val sdq_chunk_data_vec = VecInit(Seq.fill(BUS_SZ_BYTES)(0.U(8.W)))
-  for (i <- 0 to (BUS_SZ_BYTES - 1)) {
-    sdq_chunk_data_vec(sdq_chunk_size - 1.U - i.U) := sdq_chunk_data((8*(i+1))-1, 8*i)
-  }
-  io.memwrites_in.bits.data := sdq_chunk_data_vec.asUInt
-  io.memwrites_in.bits.validbytes := sdq_chunk_size
+  io.memwrites_in.bits.data := store_data_queue.io.deq.bits.chunk_data
+  io.memwrites_in.bits.validbytes := store_data_queue.io.deq.bits.chunk_size_bytes
   io.memwrites_in.bits.end_of_message := store_data_queue.io.deq.bits.is_final_chunk
   io.memwrites_in.valid := store_data_queue.io.deq.valid
   store_data_queue.io.deq.ready := io.memwrites_in.ready

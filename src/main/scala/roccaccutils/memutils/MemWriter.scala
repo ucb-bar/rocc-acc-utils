@@ -37,252 +37,163 @@ class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, va
     val no_writes_inflight = Output(Bool())
   })
 
-  val incoming_writes_Q = Module(new Queue(new WriterBundle, cmdQueueDepth))
-  incoming_writes_Q.io.enq <> io.memwrites_in
-
-  val dest_info_Q = Module(new Queue(new DstInfo, cmdQueueDepth))
-  dest_info_Q.io.enq <> io.dest_info
-
-  val dest_last_fire = RegNext(dest_info_Q.io.deq.fire)
-  val dest_last_valid = RegNext(dest_info_Q.io.deq.valid)
-  val dest_printhelp = dest_info_Q.io.deq.valid && (dest_last_fire || (!dest_last_valid))
+  val incoming_writes_queue = Module(new Queue(new WriterBundle, cmdQueueDepth))
+  incoming_writes_queue.io.enq <> io.memwrites_in
 
   LogUtils.logHexItems(
-    dest_printhelp,
+    incoming_writes_queue.io.enq.fire(),
     Seq(
-      ("op", dest_info_Q.io.deq.bits.op),
-      ("cmpflag", dest_info_Q.io.deq.bits.cmpflag),
+      ("data", incoming_writes_queue.io.enq.bits.data),
+      ("validbytes", incoming_writes_queue.io.enq.bits.validbytes),
+      ("EOM", incoming_writes_queue.io.enq.bits.end_of_message),
     ),
-    Some("dest_info_q.deq"),
-    oneline=true)
+    Some("incoming_writes_queue.enq"),
+    logger=logger)
 
-  val buf_lens_Q = Module(new Queue(UInt(64.W), 10))
-  LogUtils.logHexItems(
-    buf_lens_Q.io.enq.fire,
-    Seq(
-      ("buf_len", buf_lens_Q.io.enq.bits)
-    ),
-    Some("buf_lens_q.enq"),
-    oneline=true)
-
-  val buf_len_tracker = RegInit(0.U(64.W))
-  when (incoming_writes_Q.io.deq.fire) {
-    when (incoming_writes_Q.io.deq.bits.end_of_message) {
-      buf_len_tracker := 0.U
-    } .otherwise {
-      buf_len_tracker := buf_len_tracker +& incoming_writes_Q.io.deq.bits.validbytes
-    }
-  }
+  val dest_info_queue = Module(new Queue(new DstInfo, cmdQueueDepth))
+  dest_info_queue.io.enq <> io.dest_info
 
   LogUtils.logHexItems(
-    incoming_writes_Q.io.deq.fire,
+    dest_info_queue.io.enq.fire(),
     Seq(
-      ("validbytes", incoming_writes_Q.io.deq.bits.validbytes),
-      ("EOM", incoming_writes_Q.io.deq.bits.end_of_message),
-      ("data", incoming_writes_Q.io.deq.bits.data),
+      ("op", dest_info_queue.io.enq.bits.op),
+      ("cmpflag", dest_info_queue.io.enq.bits.cmpflag),
     ),
-    Some("incoming_writes_q.deq"),
-    oneline=true)
+    Some("dest_info_queue.enq"),
+    oneline=true,
+    logger=logger)
 
-  val NUM_QUEUES = 32
-  val QUEUE_DEPTHS = 16
-  val write_start_index = RegInit(0.U(log2Up(NUM_QUEUES+1).W))
-  val mem_resp_queues = VecInit.fill(NUM_QUEUES)(Module(new Queue(UInt(8.W), QUEUE_DEPTHS)).io)
-  // overridden below
-  for (queueno <- 0 until NUM_QUEUES) {
-    val q = mem_resp_queues(queueno)
-    q.enq.valid := false.B
-    q.enq.bits := 0.U
-    q.deq.ready := false.B
-  }
+  LogUtils.logHexItems(
+    dest_info_queue.io.deq.fire(),
+    Seq(
+      ("op", dest_info_queue.io.deq.bits.op),
+      ("cmpflag", dest_info_queue.io.deq.bits.cmpflag),
+    ),
+    Some("dest_info_queue.deq"),
+    oneline=true,
+    logger=logger)
 
-  val len_to_write = incoming_writes_Q.io.deq.bits.validbytes
+  // read out data, shifting based on user input
+  val shiftstream = Module(new StreamShifter(BUS_SZ_BITS, 2*BUS_SZ_BITS))
+  shiftstream.io.in.valid := incoming_writes_queue.io.deq.valid
+  incoming_writes_queue.io.deq.ready := shiftstream.io.in.ready
+  shiftstream.io.in.bits.data := incoming_writes_queue.io.deq.bits.data
+  shiftstream.io.in.bits.keep := BUS_BYTE_MASK >> (BUS_SZ_BYTES.U - incoming_writes_queue.io.deq.bits.validbytes)
+  shiftstream.io.in.bits.last := incoming_writes_queue.io.deq.bits.end_of_message
 
-  for (queueno <- 0 until NUM_QUEUES) {
-    mem_resp_queues((write_start_index +& queueno.U) % NUM_QUEUES.U).enq.bits := incoming_writes_Q.io.deq.bits.data >> ((len_to_write - (queueno+1).U) << 3)
-  }
+  LogUtils.logHexItems(
+    shiftstream.io.in.fire(),
+    Seq(
+      ("data", shiftstream.io.in.bits.data),
+      ("keep", shiftstream.io.in.bits.keep),
+      ("validbytes", incoming_writes_queue.io.deq.bits.validbytes),
+      ("last", shiftstream.io.in.bits.last),
+    ),
+    Some("shiftstream.in"),
+    logger=logger)
 
-
-  val wrap_len_index_wide = write_start_index +& len_to_write
-  val wrap_len_index_end = wrap_len_index_wide % NUM_QUEUES.U
-  val wrapped = wrap_len_index_wide >= NUM_QUEUES.U
-
-  val all_queues_ready = mem_resp_queues.map(_.enq.ready).reduce(_ && _)
-
-
-  val end_of_buf = incoming_writes_Q.io.deq.bits.end_of_message
-  val account_for_buf_lens_Q = (!end_of_buf) || (end_of_buf && buf_lens_Q.io.enq.ready)
-
-  val input_fire_allqueues = DecoupledHelper(
-    incoming_writes_Q.io.deq.valid,
-    all_queues_ready,
-    account_for_buf_lens_Q
-  )
-
-  buf_lens_Q.io.enq.valid := input_fire_allqueues.fire(account_for_buf_lens_Q) && end_of_buf
-  buf_lens_Q.io.enq.bits := buf_len_tracker +& incoming_writes_Q.io.deq.bits.validbytes
-
-  incoming_writes_Q.io.deq.ready := input_fire_allqueues.fire(incoming_writes_Q.io.deq.valid)
-
-  when (input_fire_allqueues.fire()) {
-    write_start_index := wrap_len_index_end
-  }
-
-  for ( queueno <- 0 until NUM_QUEUES ) {
-    val use_this_queue = Mux(wrapped,
-                             (queueno.U >= write_start_index) || (queueno.U < wrap_len_index_end),
-                             (queueno.U >= write_start_index) && (queueno.U < wrap_len_index_end)
-                            )
-    mem_resp_queues(queueno).enq.valid := input_fire_allqueues.fire() && use_this_queue
-  }
-
-  for ( queueno <- 0 until NUM_QUEUES ) {
-    when (mem_resp_queues(queueno).deq.valid) {
-      logger.logInfo("qi%d,0x%x\n", queueno.U, mem_resp_queues(queueno).deq.bits)
-    }
-  }
-
-  val read_start_index = RegInit(0.U(log2Up(NUM_QUEUES+1).W))
-
-  val remapVecData = Wire(Vec(NUM_QUEUES, UInt(8.W)))
-  val remapVecValids = Wire(Vec(NUM_QUEUES, Bool()))
-  val remapVecReadys = Wire(Vec(NUM_QUEUES, Bool()))
-
-  for (queueno <- 0 until NUM_QUEUES) {
-    val remapindex = (queueno.U +& read_start_index) % NUM_QUEUES.U
-    remapVecData(queueno) := mem_resp_queues(remapindex).deq.bits
-    remapVecValids(queueno) := mem_resp_queues(remapindex).deq.valid
-    mem_resp_queues(remapindex).deq.ready := remapVecReadys(queueno)
-  }
-
-  val count_valids = remapVecValids.map(_.asUInt).reduce(_ +& _)
+  val stream_bytes_avail = shiftstream.io.out.bits.bytes_avail
 
   val backend_bytes_written = RegInit(0.U(64.W))
-  val backend_next_write_addr = dest_info_Q.io.deq.bits.op + backend_bytes_written
+  val backend_next_write_addr = dest_info_queue.io.deq.bits.op +& backend_bytes_written
 
-  val throttle_end = Mux(buf_lens_Q.io.deq.valid,
-    buf_lens_Q.io.deq.bits - backend_bytes_written,
-    BUS_SZ_BYTES.U)
+  val busBytesMeta = (0 to BUS_SZ_BYTES_LG2UP).map(i => (i, scala.math.pow(2,i).toInt))
 
-  val throttle_end_writeable_meta = Seq((throttle_end >= BUS_SZ_BYTES.U) -> BUS_SZ_BYTES.U) ++
-    (0 until BUS_SZ_BYTES_LG2UP).map(i => throttle_end(i) -> scala.math.pow(2,i).asInt.U).reverse
-  val throttle_end_writeable_meta_log2 = Seq((throttle_end >= BUS_SZ_BYTES.U) -> BUS_SZ_BYTES_LG2UP.U) ++
-    (0 until BUS_SZ_BYTES_LG2UP).map(i => throttle_end(i) -> i.U).reverse
-  val throttle_end_writeable = MuxCase(0.U, throttle_end_writeable_meta)
-  val throttle_end_writeable_log2 = MuxCase(0.U, throttle_end_writeable_meta_log2)
+  // get the max number of bytes you can write on this xact aligned to pow2 (determined by address given)
+  val max_bytes_writeable_aligned = MuxCase(BUS_SZ_BYTES.U, busBytesMeta.dropRight(1).map{case (i, j) => (backend_next_write_addr(i) -> j.U)})
+  val max_bytes_writeable_aligned_log2 = MuxCase(BUS_SZ_BYTES_LG2UP.U, busBytesMeta.dropRight(1).map{case (i, j) => (backend_next_write_addr(i) -> i.U)})
 
-  val ptr_align_max_bytes_writable_meta = (0 until BUS_SZ_BYTES_LG2UP).map(i => backend_next_write_addr(i) -> scala.math.pow(2,i).asInt.U)
-  val ptr_align_max_bytes_writable_meta_log2 = (0 until BUS_SZ_BYTES_LG2UP).map(i => backend_next_write_addr(i) -> i.U)
-  val ptr_align_max_bytes_writeable = MuxCase(BUS_SZ_BYTES.U, ptr_align_max_bytes_writable_meta)
-  val ptr_align_max_bytes_writeable_log2 = MuxCase(BUS_SZ_BYTES_LG2UP.U, ptr_align_max_bytes_writable_meta_log2)
+  // get the max number of available bytes aligned to pow2
+  val max_bytes_available_aligned = MuxCase(0.U, busBytesMeta.map{case (i, j) => (stream_bytes_avail(i) -> j.U)}.reverse)
+  val max_bytes_available_aligned_log2 = MuxCase(0.U, busBytesMeta.map{case (i, j) => (stream_bytes_avail(i) -> i.U)}.reverse)
 
-  val count_valid_meta = (0 to BUS_SZ_BYTES_LG2UP).map(i => count_valid(i) -> scala.math.pow(2,i).asInt.U).reverse
-  val count_valid_meta_log2 = (0 to BUS_SZ_BYTES_LG2UP).map(i => count_valid(i) -> i.U).reverse
-  val count_valids_largest_aligned = MuxCase(0.U, cound_valid_meta)
-  val count_valids_largest_aligned_log2 = MuxCase(0.U, cound_valid_meta_log2)
+  val bytes_to_write = max_bytes_writeable_aligned.min(max_bytes_available_aligned)
+  val bytes_to_write_log2 = max_bytes_writeable_aligned_log2.min(max_bytes_available_aligned_log2)
+  val has_bytes_to_write = (bytes_to_write =/= 0.U)
 
-  val bytes_to_write = Mux(
-    ptr_align_max_bytes_writeable < count_valids_largest_aligned,
-    Mux(ptr_align_max_bytes_writeable < throttle_end_writeable,
-      ptr_align_max_bytes_writeable,
-      throttle_end_writeable),
-    Mux(count_valids_largest_aligned < throttle_end_writeable,
-      count_valids_largest_aligned,
-      throttle_end_writeable)
-  )
-  val bytes_to_write_log2 = Mux(
-    ptr_align_max_bytes_writeable_log2 < count_valids_largest_aligned_log2,
-    Mux(ptr_align_max_bytes_writeable_log2 < throttle_end_writeable_log2,
-      ptr_align_max_bytes_writeable_log2,
-      throttle_end_writeable_log2),
-    Mux(count_valids_largest_aligned_log2 < throttle_end_writeable_log2,
-      count_valids_largest_aligned_log2,
-      throttle_end_writeable_log2)
-  )
+  shiftstream.io.out.bits.read_bytes := bytes_to_write
 
-  val enough_data = bytes_to_write =/= 0.U
+  LogUtils.logHexItems(
+    shiftstream.io.out.fire(),
+    Seq(
+      ("data", shiftstream.io.out.bits.data),
+      ("last", shiftstream.io.out.bits.last),
+      ("bytes_avail", shiftstream.io.out.bits.bytes_avail),
+      ("read_bytes", shiftstream.io.out.bits.read_bytes),
+    ),
+    Some("shiftstream.out"),
+    logger=logger)
 
-  val done_writing_stream = buf_lens_Q.io.deq.valid && (buf_lens_Q.io.deq.bits === backend_bytes_written)
+  val end_of_stream = shiftstream.io.out.valid && shiftstream.io.out.bits.last && (stream_bytes_avail === bytes_to_write)
+  assert(!end_of_stream || (end_of_stream && has_bytes_to_write), "Stream ends must have bytes to write")
+
+  val s_write_stream :: s_write_cmpflag :: Nil = Enum(2)
+  val state = RegInit(s_write_stream)
+  switch (state) {
+    is (s_write_stream) {
+      when (io.l2io.req.fire() && end_of_stream) {
+        state := s_write_cmpflag
+      }
+    }
+    is (s_write_cmpflag) {
+      when (io.l2io.req.fire()) {
+        state := s_write_stream
+      }
+    }
+  }
+  val in_s_write_cmpflag = if (writeCmpFlag) (state === s_write_cmpflag) else false.B // could be true.B when !end_of_stream is true.B (this should take prio)
+  val is_done_writing = if (writeCmpFlag) in_s_write_cmpflag else end_of_stream
 
   val mem_write_fire = DecoupledHelper(
     io.l2io.req.ready,
-    enough_data,
-    !done_writing_stream,
-    dest_info_Q.io.deq.valid
+    dest_info_queue.io.deq.valid,
+    shiftstream.io.out.valid,
   )
 
-  val bool_ptr_write_fire = DecoupledHelper(
-    io.l2io.req.ready,
-    buf_lens_Q.io.deq.valid,
-    buf_lens_Q.io.deq.bits === backend_bytes_written,
-    dest_info_Q.io.deq.valid
-  )
-
-  for (queueno <- 0 until NUM_QUEUES) {
-    remapVecReadys(queueno) := (queueno.U < bytes_to_write) && mem_write_fire.fire()
-  }
-
-  when (mem_write_fire.fire()) {
-    read_start_index := (read_start_index +& bytes_to_write) % NUM_QUEUES.U
-    backend_bytes_written := backend_bytes_written + bytes_to_write
-
-  }
-
-  val remapped_write_data = Cat(remapVecData.reverse) // >> ((NUM_QUEUES.U - bytes_to_write) << 3)
-
-  if (writeCmpFlag) {
-    io.l2io.req.valid := mem_write_fire.fire(io.l2io.req.ready) || bool_ptr_write_fire.fire(io.l2io.req.ready)
-  } else {
-    io.l2io.req.valid := mem_write_fire.fire(io.l2io.req.ready)
-  }
-  io.l2io.req.bits.size := Mux(done_writing_stream, 0.U, bytes_to_write_log2)
-  io.l2io.req.bits.addr := Mux(done_writing_stream, dest_info_Q.io.deq.bits.cmpflag, backend_next_write_addr)
-  io.l2io.req.bits.data := Mux(done_writing_stream, 1.U, remapped_write_data)
+  io.l2io.req.valid := mem_write_fire.fire(io.l2io.req.ready) && (has_bytes_to_write || in_s_write_cmpflag)
+  io.l2io.req.bits.size := Mux(in_s_write_cmpflag,                                 0.U,          bytes_to_write_log2)
+  io.l2io.req.bits.addr := Mux(in_s_write_cmpflag, dest_info_queue.io.deq.bits.cmpflag,      backend_next_write_addr)
+  io.l2io.req.bits.data := Mux(in_s_write_cmpflag,                                 1.U, shiftstream.io.out.bits.data)
   io.l2io.req.bits.cmd := M_XWR
+  io.l2io.resp.ready := true.B // sync any write resp
 
   LogUtils.logHexItems(
-    io.l2io.req.fire,
+    io.l2io.req.fire(),
     Seq(
-      ("addr", io.l2io.req.bits.addr),
-      ("size", io.l2io.req.bits.size),
-      ("data", io.l2io.req.bits.data),
+      ("EOS", end_of_stream),
+      ("has_bytes_to_write", has_bytes_to_write),
     ),
-    Some("L2IO write fire"),
-    oneline=true)
+    Some("l2_fire"),
+    oneline=true,
+    logger=logger
+  )
 
-  buf_lens_Q.io.deq.ready := bool_ptr_write_fire.fire(buf_lens_Q.io.deq.valid)
-  dest_info_Q.io.deq.ready := bool_ptr_write_fire.fire(dest_info_Q.io.deq.valid)
+  val streams_completed = RegInit(0.U(64.W))
 
-  val bufs_completed = RegInit(0.U(64.W))
-  io.bufs_completed := bufs_completed
+  when (io.l2io.req.fire()) {
+    val next_backend_bytes_written = Mux(in_s_write_cmpflag, 0.U, Mux(end_of_stream, 0.U, backend_bytes_written +& bytes_to_write))
+    val next_streams_completed = streams_completed +& is_done_writing.asUInt
+    backend_bytes_written := next_backend_bytes_written
+    streams_completed := next_streams_completed
 
-  io.l2io.resp.ready := true.B
-
-  io.no_writes_inflight := io.l2io.no_memops_inflight
-
-  when (bool_ptr_write_fire.fire()) {
-    bufs_completed := bufs_completed + 1.U
-    backend_bytes_written := 0.U
+    LogUtils.logHexItems(
+      true.B,
+      Seq(
+        ("next_backend_bytes_written", next_backend_bytes_written),
+        ("next_streams_completed", next_streams_completed),
+        ("backend_bytes_written", backend_bytes_written),
+        ("streams_completed", streams_completed),
+      ),
+      Some("update_ctrs"),
+      oneline=true,
+      logger=logger
+    )
   }
 
-  LogUtils.logHexItems(
-    bool_ptr_write_fire.fire,
-    Seq(
-      ("write_cmpflag", dest_info_Q.io.deq.bits.cmpflag),
-      ("write_ptr", dest_info_Q.io.deq.bits.op),
-    ),
-    Some("dest_info_q.deq"),
-    oneline=true)
+  dest_info_queue.io.deq.ready := mem_write_fire.fire(dest_info_queue.io.deq.valid) && is_done_writing
+  // TODO: any comb loop here (io.out.valid -> comb -> io.out.ready -> ss comb -> io.out.valid)?
+  shiftstream.io.out.ready := mem_write_fire.fire(shiftstream.io.out.valid) && (in_s_write_cmpflag || !end_of_stream)
 
-  LogUtils.logHexItems(
-    (count_valids =/= 0.U),
-    Seq(
-      ("write_start_index", read_start_index),
-      ("backend_bytes_written", backend_bytes_written),
-      ("count_valids", count_valids),
-      ("ptr_align_max_bytes_writeable", ptr_align_max_bytes_writeable),
-      ("bytes_to_write", bytes_to_write),
-      ("bytes_to_write_log2", bytes_to_write_log2),
-    ),
-    Some("memwriter-serializer"))
+  io.bufs_completed := streams_completed
+  io.no_writes_inflight := io.l2io.no_memops_inflight
 }
