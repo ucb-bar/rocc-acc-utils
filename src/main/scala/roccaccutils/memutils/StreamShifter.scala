@@ -144,14 +144,14 @@ class StreamShifter(maxInWidthBits: Int, capacityBytes: Int) extends Module {
   io.out.valid := !empty
 
   when (io.in.fire) {
-    printf("IN: Last:%d Keep:%x Data:%x\n",
+    printf("SSIN: Last:%d Keep:%x Data:%x\n",
       io.in.bits.last,
       io.in.bits.keep,
       io.in.bits.data)
   }
 
   when (io.out.fire()) {
-    printf("OUT: Last:%d BA:%d RB:%d Data:%x\n",
+    printf("SSOUT: Last:%d BA:%d RB:%d Data:%x\n",
       io.out.bits.last,
       io.out.bits.bytes_avail,
       io.out.bits.read_bytes,

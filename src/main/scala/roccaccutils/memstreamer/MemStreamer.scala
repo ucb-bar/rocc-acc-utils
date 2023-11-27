@@ -38,10 +38,6 @@ trait MemStreamer
   // --------------------------
 
   // 1. Receive data from the memloader to load_data_queue
-  /* Slice data by the L2 bandwidth (assuming 32 bytes).
-  ** Different L2 bandwidth will require to change
-  ** the memwriter module in Top.scala
-  ** and the LiteralChunk bundle in Common.scala. */
 
   val load_data_queue = Module(new Queue(new LiteralChunk, 5))
   dontTouch(load_data_queue.io.count)
@@ -68,7 +64,6 @@ trait MemStreamer
       ("data", load_data_queue.io.enq.bits.chunk_data),
     ),
     Some("load_data_q.enq"),
-    oneline=true,
     logger=logger)
 
   LogUtils.logHexItems(
@@ -79,10 +74,9 @@ trait MemStreamer
       ("data", load_data_queue.io.deq.bits.chunk_data),
     ),
     Some("load_data_q.deq"),
-    oneline=true,
     logger=logger)
 
-  // 3. Write data to through the memwriter
+  // 2. Write data to through the memwriter
 
   val store_data_queue = Module(new Queue(new LiteralChunk, 5))
   dontTouch(store_data_queue.io.count)
@@ -111,7 +105,6 @@ trait MemStreamer
       ("data", store_data_queue.io.enq.bits.chunk_data),
     ),
     Some("store_data_q.enq"),
-    oneline=true,
     logger=logger)
 
   LogUtils.logHexItems(
@@ -122,6 +115,5 @@ trait MemStreamer
       ("data", store_data_queue.io.deq.bits.chunk_data),
     ),
     Some("store_data_q.deq"),
-    oneline=true,
     logger=logger)
 }

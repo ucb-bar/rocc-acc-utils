@@ -31,7 +31,7 @@ trait MemStreamerCommandRouter extends Module {
   // --------------------------
 
   val io: MemStreamerCmdBundle
-  val cmd_queue_depth: Int
+  val cmdQueueDepth: Int
   implicit val p: Parameters
 
   // --------------------------
@@ -56,7 +56,7 @@ trait MemStreamerCommandRouter extends Module {
   io.dmem_status_out.valid <> io.rocc_in.fire
 
   // Memloader interface
-  val src_info_queue = Module(new Queue(new StreamInfo, cmd_queue_depth))
+  val src_info_queue = Module(new Queue(new StreamInfo, cmdQueueDepth))
   src_info_queue.io.enq.bits.ip := cur_rs1
   src_info_queue.io.enq.bits.isize := cur_rs2
   val src_info_fire = DecoupledHelper(
@@ -68,7 +68,7 @@ trait MemStreamerCommandRouter extends Module {
   io.src_info <> src_info_queue.io.deq
 
   // Memwriter interface
-  val dest_info_queue = Module(new Queue(new DstInfo, cmd_queue_depth))
+  val dest_info_queue = Module(new Queue(new DstInfo, cmdQueueDepth))
   dest_info_queue.io.enq.bits.op := cur_rs1
   dest_info_queue.io.enq.bits.cmpflag := cur_rs2
   val dest_info_fire = DecoupledHelper(
@@ -97,7 +97,7 @@ trait MemStreamerCommandRouter extends Module {
     cur_funct === FUNCT_CHECK_COMPLETION,
     io.no_writes_inflight,
     track_dispatched_src_infos =/= 0.U,
-    io.bufs_completed - bufs_completed_when_start === track_dispatched_src_infos,
+    (io.bufs_completed - bufs_completed_when_start) === track_dispatched_src_infos,
     io.rocc_out.ready
   )
 
