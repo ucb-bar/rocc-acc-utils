@@ -62,7 +62,7 @@ abstract class MemStreamerRoCCImp(outer: MemStreamerRoCC)(implicit p: Parameters
   io.busy := false.B
 
   val memloader = Module(new MemLoader(memLoaderQueueDepth=queueDepth, logger=outer.logger))
-  outer.l2_memloader.module.io.userif <> memloader.io.l2helperUser
+  outer.l2_memloader.module.io.userif <> memloader.io.l2io
   memloader.io.src_info <> cmd_router.io.src_info
 
   val memwriter = Module(new MemWriter(cmdQueueDepth=queueDepth, logger=outer.logger))
