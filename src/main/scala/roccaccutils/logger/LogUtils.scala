@@ -40,4 +40,23 @@ object LogUtils {
       }
     }
   }
+
+  def logAndAssert(
+    cond: Bool,
+    assertStr: String,
+    critical: Boolean = false,
+    logger: Logger = DefaultLogger
+  )(
+    implicit p: Parameters = Parameters.empty,
+    valName: ValName = ValName("<UnknownMod>")
+  ): Unit = {
+    when (!cond) {
+      if (critical) {
+        logger.logCritical(assertStr)
+      } else {
+        logger.logInfo(assertStr)
+      }
+    }
+    assert(cond, assertStr)
+  }
 }

@@ -146,11 +146,7 @@ class L2MemHelperModule(outer: L2MemHelper, tlbConfig: TLBConfig, printInfo: Str
   val addr_mask_check = (1.U(64.W) << request_input.bits.size) - 1.U
   val assertcheck = RegNext((!request_input.valid) || ((request_input.bits.addr & addr_mask_check) === 0.U))
 
-  when (!assertcheck) {
-    logger.logInfo(printInfo + " L2IF: access addr must be aligned to write width\n")
-  }
-  assert(assertcheck,
-    printInfo + " L2IF: access addr must be aligned to write width\n")
+  LogUtils.logAndAssert(assertcheck, printInfo + " L2IF: access addr must be aligned to write width\n")
 
   val global_memop_accepted = RegInit(0.U(64.W))
   when (io.userif.req.fire) {
@@ -168,11 +164,7 @@ class L2MemHelperModule(outer: L2MemHelper, tlbConfig: TLBConfig, printInfo: Str
   val free_outstanding_op_slots = (global_memop_sent - global_memop_ackd) < (1 << outer.tlTagBits).U
   val assert_free_outstanding_op_slots = (global_memop_sent - global_memop_ackd) <= (1 << outer.tlTagBits).U
 
-  when (!assert_free_outstanding_op_slots) {
-    logger.logInfo(printInfo + " L2IF: Too many outstanding requests for tag count.\n")
-  }
-  assert(assert_free_outstanding_op_slots,
-    printInfo + " L2IF: Too many outstanding requests for tag count.\n")
+  LogUtils.logAndAssert(assert_free_outstanding_op_slots, printInfo + " L2IF: Too many outstanding requests for tag count.\n")
 
   when (request_input.fire) {
     global_memop_sent := global_memop_sent + 1.U
@@ -192,8 +184,7 @@ class L2MemHelperModule(outer: L2MemHelper, tlbConfig: TLBConfig, printInfo: Str
                             data=request_input.bits.data << ((request_input.bits.addr(4, 0) << 3)))
     dmem.a.bits := bundle
   } .elsewhen (request_input.valid) {
-    logger.logInfo(printInfo + " ERR")
-    assert(false.B, "ERR")
+    LogUtils.logAndAssert(false.B, printInfo + "ERR")
   }
 
   val tl_resp_queues = VecInit.fill(outer.numOutstandingRequestsAllowed)(
@@ -221,21 +212,35 @@ class L2MemHelperModule(outer: L2MemHelper, tlbConfig: TLBConfig, printInfo: Str
 
   when (dmem.a.fire) {
     when (request_input.bits.cmd === M_XRD) {
-      logger.logInfo(printInfo + " L2IF: req(read) vaddr: 0x%x, paddr: 0x%x, wid: 0x%x, opnum: %d, sendtag: %d\n",
-        request_input.bits.addr,
-        tlb.io.resp.paddr,
-        request_input.bits.size,
-        global_memop_sent,
-        sendtag)
+      LogUtils.logHexItems(
+        true.B,
+        Seq(
+          ("vaddr", request_input.bits.addr),
+          ("paddr", tlb.io.resp.paddr),
+          ("width", request_input.bits.size),
+          ("opnum", global_memop_sent),
+          ("sendtag", sendtag),
+        ),
+        Some(printInfo + " L2IF req(read)"),
+        critical=true,
+        logger=logger
+      )
     }
     when (request_input.bits.cmd === M_XWR) {
-      logger.logCritical(printInfo + " L2IF: req(write) vaddr: 0x%x, paddr: 0x%x, wid: 0x%x, data: 0x%x, opnum: %d, sendtag: %d\n",
-        request_input.bits.addr,
-        tlb.io.resp.paddr,
-        request_input.bits.size,
-        request_input.bits.data,
-        global_memop_sent,
-        sendtag)
+      LogUtils.logHexItems(
+        true.B,
+        Seq(
+          ("vaddr", request_input.bits.addr),
+          ("paddr", tlb.io.resp.paddr),
+          ("width", request_input.bits.size),
+          ("data", request_input.bits.data),
+          ("opnum", global_memop_sent),
+          ("sendtag", sendtag),
+        ),
+        Some(printInfo + " L2IF req(write)"),
+        critical=true,
+        logger=logger
+      )
 
       if (printWriteBytes) {
         for (i <- 0 until 32) {
@@ -292,26 +297,38 @@ class L2MemHelperModule(outer: L2MemHelper, tlbConfig: TLBConfig, printInfo: Str
     tl_resp_queues(i).deq.ready := fire_user_resp.fire(queueValid) && (outstanding_req_addr.io.deq.bits.tag === i.U)
   }
 
+  LogUtils.logHexItems(
+    dmem.d.fire() && edge.hasData(dmem.d.bits),
+    Seq(
+      ("data", dmem.d.bits.data),
+      ("opnum", global_memop_ackd),
+      ("gettag", dmem.d.bits.source),
+    ),
+    Some(printInfo + " L2IF resp(read)"),
+    logger=logger
+  )
 
-  when (dmem.d.fire) {
-    when (edge.hasData(dmem.d.bits)) {
-      logger.logInfo(printInfo + " L2IF: resp(read) data: 0x%x, opnum: %d, gettag: %d\n",
-        dmem.d.bits.data,
-        global_memop_ackd,
-        dmem.d.bits.source)
-    } .otherwise {
-      logger.logInfo(printInfo + " L2IF: resp(write) opnum: %d, gettag: %d\n",
-        global_memop_ackd,
-        dmem.d.bits.source)
-    }
-  }
+  LogUtils.logHexItems(
+    dmem.d.fire() && !edge.hasData(dmem.d.bits),
+    Seq(
+      ("opnum", global_memop_ackd),
+      ("gettag", dmem.d.bits.source),
+    ),
+    Some(printInfo + " L2IF resp(write)"),
+    oneline=true,
+    logger=logger
+  )
 
-  when (response_output.fire) {
-    logger.logInfo(printInfo + " L2IF: realresp() data: 0x%x, opnum: %d, gettag: %d\n",
-      resultdata,
-      global_memop_resp_to_user,
-      outstanding_req_addr.io.deq.bits.tag)
-  }
+  LogUtils.logHexItems(
+    response_output.fire,
+    Seq(
+      ("data", resultdata),
+      ("opnum", global_memop_resp_to_user),
+      ("gettag", outstanding_req_addr.io.deq.bits.tag),
+    ),
+    Some(printInfo + " L2IF realresp()"),
+    logger=logger
+  )
 
   when (dmem.d.fire) {
     global_memop_ackd := global_memop_ackd + 1.U
