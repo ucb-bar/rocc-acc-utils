@@ -22,7 +22,7 @@ class DstInfo extends Bundle {
   val cmpflag = UInt(64.W) // output pointer for completion flag
 }
 
-class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, val logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams)
+class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4, val writeCmpFlag: Boolean = true, val logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams)
   extends Module
   with MemoryOpConstants
   with HasL2MemHelperParams {
@@ -37,7 +37,7 @@ class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, va
     val no_writes_inflight = Output(Bool())
   })
 
-  val incoming_writes_queue = Module(new Queue(new WriterBundle, cmdQueueDepth))
+  val incoming_writes_queue = Module(new Queue(new WriterBundle, dataQueueDepth))
   incoming_writes_queue.io.enq <> io.memwrites_in
 
   LogUtils.logHexItems(
@@ -50,7 +50,7 @@ class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, va
     Some("incoming_writes_queue.enq"),
     logger=logger)
 
-  val dest_info_queue = Module(new Queue(new DstInfo, cmdQueueDepth))
+  val dest_info_queue = Module(new Queue(new DstInfo, metadataQueueDepth))
   dest_info_queue.io.enq <> io.dest_info
 
   LogUtils.logHexItems(
@@ -74,7 +74,7 @@ class MemWriter(val cmdQueueDepth: Int = 4, val writeCmpFlag: Boolean = true, va
     logger=logger)
 
   // read out data, shifting based on user input
-  val shiftstream = Module(new StreamShifter(BUS_SZ_BITS, 2*BUS_SZ_BITS))
+  val shiftstream = Module(new StreamShifter(BUS_SZ_BITS, 3*BUS_SZ_BITS))
   shiftstream.io.in.valid := incoming_writes_queue.io.deq.valid
   incoming_writes_queue.io.deq.ready := shiftstream.io.in.ready
   shiftstream.io.in.bits.data := incoming_writes_queue.io.deq.bits.data

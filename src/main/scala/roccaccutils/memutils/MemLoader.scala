@@ -30,7 +30,7 @@ class StreamInfo extends Bundle {
 //     - user must read out all data for it to not stall
 //
 //   Input given in bus bytes sized chunks, may not be aligned
-class MemLoader(memLoaderQueueDepth: Int = 16*4, logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams) extends Module
+class MemLoader(metadataQueueDepth: Int = 10, dataQueueDepth: Int = 16*4, logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams) extends Module
      with MemoryOpConstants
      with HasL2MemHelperParams {
 
@@ -79,7 +79,7 @@ class MemLoader(memLoaderQueueDepth: Int = 16*4, logger: Logger = DefaultLogger)
     val start_byte = UInt(BUS_SZ_BYTES_LG2UP.W) // inclusive
     val end_byte = UInt((BUS_SZ_BYTES_LG2UP + 1).W) // exclusive
     val last = Bool()
-  }, 256)) // arb. size
+  }, metadataQueueDepth)) // arb. size
 
   val req_fire = DecoupledHelper(
     io.l2io.req.ready,
@@ -134,11 +134,11 @@ class MemLoader(memLoaderQueueDepth: Int = 16*4, logger: Logger = DefaultLogger)
   aligner.io.in.bits.keep := (BUS_BYTE_MASK >> (BUS_SZ_BYTES.U - load_info_queue.io.deq.bits.end_byte)) & (BUS_BYTE_MASK << load_info_queue.io.deq.bits.start_byte)
 
   // store aligned data
-  val aligned_data_queue = Module(new Queue(new StreamChannel(BUS_SZ_BITS), memLoaderQueueDepth))
+  val aligned_data_queue = Module(new Queue(new StreamChannel(BUS_SZ_BITS), dataQueueDepth))
   aligned_data_queue.io.enq <> aligner.io.out
 
   // read out data, shifting based on user input
-  val shiftstream = Module(new StreamShifter(BUS_SZ_BITS, 2*BUS_SZ_BITS))
+  val shiftstream = Module(new StreamShifter(BUS_SZ_BITS, 3*BUS_SZ_BITS))
   shiftstream.io.in.valid := aligned_data_queue.io.deq.valid
   aligned_data_queue.io.deq.ready := shiftstream.io.in.ready
   shiftstream.io.in.bits.data := aligned_data_queue.io.deq.bits.data

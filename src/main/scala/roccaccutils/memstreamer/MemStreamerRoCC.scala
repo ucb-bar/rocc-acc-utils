@@ -46,7 +46,8 @@ abstract class MemStreamerRoCCImp(outer: MemStreamerRoCC)(implicit p: Parameters
   // MUST BE DEFINED BY CHILD
   // --------------------------
 
-  val queueDepth: Int
+  val metadataQueueDepth: Int
+  val dataQueueDepth: Int
   val cmd_router: MemStreamerCommandRouter
   val streamer: MemStreamer
 
@@ -61,11 +62,11 @@ abstract class MemStreamerRoCCImp(outer: MemStreamerRoCC)(implicit p: Parameters
   io.interrupt := false.B
   io.busy := false.B
 
-  val memloader = Module(new MemLoader(memLoaderQueueDepth=queueDepth, logger=outer.logger))
+  val memloader = Module(new MemLoader(metadataQueueDepth=metadataQueueDepth, dataQueueDepth=dataQueueDepth, logger=outer.logger))
   outer.l2_memloader.module.io.userif <> memloader.io.l2io
   memloader.io.src_info <> cmd_router.io.src_info
 
-  val memwriter = Module(new MemWriter(cmdQueueDepth=queueDepth, logger=outer.logger))
+  val memwriter = Module(new MemWriter(metadataQueueDepth=metadataQueueDepth, dataQueueDepth=dataQueueDepth, logger=outer.logger))
   outer.l2_memwriter.module.io.userif <> memwriter.io.l2io
 
   outer.l2_memloader.module.io.sfence <> cmd_router.io.sfence_out
