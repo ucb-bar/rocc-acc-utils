@@ -9,6 +9,8 @@ import org.chipsalliance.cde.config.{Parameters}
 import freechips.rocketchip.util.{DecoupledHelper}
 import freechips.rocketchip.rocket.constants.{MemoryOpConstants}
 import roccaccutils.logger._
+import midas.targetutils.{BRAMQueue}
+import midas.targetutils.xdc.{RAMStyleHint, RAMStyles}
 
 class MemLoaderConsumerBundle(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val user_consumed_bytes = Input(UInt((BUS_SZ_BYTES_LG2UP + 1).W)) // amt of bytes read (comb. related to available_output_bytes)
@@ -134,7 +136,8 @@ class MemLoader(metadataQueueDepth: Int = 10, dataQueueDepth: Int = 16*4, logger
   aligner.io.in.bits.keep := (BUS_BYTE_MASK >> (BUS_SZ_BYTES.U - load_info_queue.io.deq.bits.end_byte)) & (BUS_BYTE_MASK << load_info_queue.io.deq.bits.start_byte)
 
   // store aligned data
-  val aligned_data_queue = Module(new Queue(new StreamChannel(BUS_SZ_BITS), dataQueueDepth))
+  val aligned_data_queue = Module((new BRAMQueue(dataQueueDepth)) {new StreamChannel(BUS_SZ_BITS)})
+  RAMStyleHint(aligned_data_queue.fq.ram, RAMStyles.ULTRA)
   aligned_data_queue.io.enq <> aligner.io.out
 
   // read out data, shifting based on user input

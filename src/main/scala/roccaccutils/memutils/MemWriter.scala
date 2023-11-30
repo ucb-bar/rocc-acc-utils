@@ -10,6 +10,8 @@ import freechips.rocketchip.rocket.{TLBConfig}
 import freechips.rocketchip.util.{DecoupledHelper}
 import freechips.rocketchip.rocket.constants.{MemoryOpConstants}
 import roccaccutils.logger._
+import midas.targetutils.{BRAMQueue}
+import midas.targetutils.xdc.{RAMStyleHint, RAMStyles}
 
 class WriterBundle(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val data = UInt(BUS_SZ_BITS.W)
@@ -28,7 +30,6 @@ object WriteOnCompletion extends Enumeration {
 }
 import WriteOnCompletion._
 
-// TODO: Use URAM (or BRAMs) for data queues in MemWriter/Reader
 // TODO: Check logic for the custom_val and variation
 class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4, val writeCmpFlag: WriteOnCompletion = WriteOnCompletion.BOOL, printInfo: String = "", val logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams)
   extends Module
@@ -47,7 +48,8 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
     val no_writes_inflight = Output(Bool())
   })
 
-  val incoming_writes_queue = Module(new Queue(new WriterBundle, dataQueueDepth))
+  val incoming_writes_queue = Module((new BRAMQueue(dataQueueDepth)) {new WriterBundle})
+  RAMStyleHint(incoming_writes_queue.fq.ram, RAMStyles.ULTRA)
   incoming_writes_queue.io.enq <> io.memwrites_in
 
   LogUtils.logHexItems(
