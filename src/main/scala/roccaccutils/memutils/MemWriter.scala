@@ -22,7 +22,15 @@ class DstInfo extends Bundle {
   val cmpflag = UInt(64.W) // output pointer for completion flag
 }
 
-class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4, val writeCmpFlag: Boolean = true, val logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams)
+object WriteOnCompletion extends Enumeration {
+  type WriteOnCompletion = Value
+  val BOOL, FINAL_AMOUNT_BYTES, CUSTOM_VALUE, DISABLED = Value
+}
+import WriteOnCompletion._
+
+// TODO: Use URAM (or BRAMs) for data queues in MemWriter/Reader
+// TODO: Check logic for the custom_val and variation
+class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4, val writeCmpFlag: WriteOnCompletion = WriteOnCompletion.BOOL, printInfo: String = "", val logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams)
   extends Module
   with MemoryOpConstants
   with HasL2MemHelperParams {
@@ -32,6 +40,8 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
 
     val memwrites_in = Flipped(Decoupled(new WriterBundle))
     val dest_info = Flipped(Decoupled(new DstInfo))
+
+    val custom_write_value = Flipped(Decoupled(UInt(64.W)))
 
     val bufs_completed = Output(UInt(64.W))
     val no_writes_inflight = Output(Bool())
@@ -47,7 +57,7 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
       ("validbytes", incoming_writes_queue.io.enq.bits.validbytes),
       ("EOM", incoming_writes_queue.io.enq.bits.end_of_message),
     ),
-    Some("incoming_writes_queue.enq"),
+    Some(printInfo + " " + "incoming_writes_queue.enq"),
     logger=logger)
 
   val dest_info_queue = Module(new Queue(new DstInfo, metadataQueueDepth))
@@ -59,7 +69,7 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
       ("op", dest_info_queue.io.enq.bits.op),
       ("cmpflag", dest_info_queue.io.enq.bits.cmpflag),
     ),
-    Some("dest_info_queue.enq"),
+    Some(printInfo + " " + "dest_info_queue.enq"),
     oneline=true,
     logger=logger)
 
@@ -69,7 +79,7 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
       ("op", dest_info_queue.io.deq.bits.op),
       ("cmpflag", dest_info_queue.io.deq.bits.cmpflag),
     ),
-    Some("dest_info_queue.deq"),
+    Some(printInfo + " " + "dest_info_queue.deq"),
     oneline=true,
     logger=logger)
 
@@ -89,7 +99,7 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
       ("validbytes", incoming_writes_queue.io.deq.bits.validbytes),
       ("last", shiftstream.io.in.bits.last),
     ),
-    Some("shiftstream.in"),
+    Some(printInfo + " " + "shiftstream.in"),
     logger=logger)
 
   val stream_bytes_avail = shiftstream.io.out.bits.bytes_avail
@@ -121,11 +131,22 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
       ("bytes_avail", shiftstream.io.out.bits.bytes_avail),
       ("read_bytes", shiftstream.io.out.bits.read_bytes),
     ),
-    Some("shiftstream.out"),
+    Some(printInfo + " " + "shiftstream.out"),
     logger=logger)
 
   val end_of_stream = shiftstream.io.out.valid && shiftstream.io.out.bits.last && (stream_bytes_avail === bytes_to_write)
   assert(!end_of_stream || (end_of_stream && has_bytes_to_write), "Stream ends must have bytes to write")
+
+  val pre_next_backend_bytes_written = backend_bytes_written + bytes_to_write
+
+  val custom_value_valid = if (writeCmpFlag == WriteOnCompletion.CUSTOM_VALUE) io.custom_write_value.valid else true.B
+  val custom_value_bits = writeCmpFlag match {
+    case WriteOnCompletion.BOOL => 1.U(64.W)
+    case WriteOnCompletion.FINAL_AMOUNT_BYTES => pre_next_backend_bytes_written
+    case WriteOnCompletion.CUSTOM_VALUE => io.custom_write_value.bits
+    case WriteOnCompletion.DISABLED => 1.U(64.W) // Don't care about this
+  }
+  require(writeCmpFlag == WriteOnCompletion.DISABLED || (custom_value_bits.getWidth <= 64), "Will write 64b to memory. Any larger is unsupported.")
 
   val s_write_stream :: s_write_cmpflag :: Nil = Enum(2)
   val state = RegInit(s_write_stream)
@@ -136,13 +157,13 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
       }
     }
     is (s_write_cmpflag) {
-      when (io.l2io.req.fire()) {
+      when (io.l2io.req.fire() && custom_value_valid) {
         state := s_write_stream
       }
     }
   }
-  val in_s_write_cmpflag = if (writeCmpFlag) (state === s_write_cmpflag) else false.B // could be true.B when !end_of_stream is true.B (this should take prio)
-  val is_done_writing = if (writeCmpFlag) in_s_write_cmpflag else end_of_stream
+  val in_s_write_cmpflag = if (writeCmpFlag != WriteOnCompletion.DISABLED) (state === s_write_cmpflag) else false.B // could be true.B when !end_of_stream is true.B (this should take prio)
+  val is_done_writing = if (writeCmpFlag != WriteOnCompletion.DISABLED) (in_s_write_cmpflag && custom_value_valid) else end_of_stream
 
   val mem_write_fire = DecoupledHelper(
     io.l2io.req.ready,
@@ -150,10 +171,10 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
     shiftstream.io.out.valid,
   )
 
-  io.l2io.req.valid := mem_write_fire.fire(io.l2io.req.ready) && (has_bytes_to_write || in_s_write_cmpflag)
-  io.l2io.req.bits.size := Mux(in_s_write_cmpflag,                                 0.U,          bytes_to_write_log2)
+  io.l2io.req.valid := mem_write_fire.fire(io.l2io.req.ready) && (has_bytes_to_write || (in_s_write_cmpflag && custom_value_valid))
+  io.l2io.req.bits.size := Mux(in_s_write_cmpflag,                                 3.U,          bytes_to_write_log2)
   io.l2io.req.bits.addr := Mux(in_s_write_cmpflag, dest_info_queue.io.deq.bits.cmpflag,      backend_next_write_addr)
-  io.l2io.req.bits.data := Mux(in_s_write_cmpflag,                                 1.U, shiftstream.io.out.bits.data)
+  io.l2io.req.bits.data := Mux(in_s_write_cmpflag,                   custom_value_bits, shiftstream.io.out.bits.data)
   io.l2io.req.bits.cmd := M_XWR
   io.l2io.resp.ready := true.B // sync any write resp
 
@@ -163,7 +184,7 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
       ("EOS", end_of_stream),
       ("has_bytes_to_write", has_bytes_to_write),
     ),
-    Some("l2_fire"),
+    Some(printInfo + " " + "l2_fire"),
     oneline=true,
     logger=logger
   )
@@ -171,7 +192,7 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
   val streams_completed = RegInit(0.U(64.W))
 
   when (io.l2io.req.fire()) {
-    val next_backend_bytes_written = Mux(in_s_write_cmpflag, 0.U, Mux(end_of_stream, 0.U, backend_bytes_written +& bytes_to_write))
+    val next_backend_bytes_written = Mux(in_s_write_cmpflag, 0.U, Mux(end_of_stream, 0.U, pre_next_backend_bytes_written))
     val next_streams_completed = streams_completed +& is_done_writing.asUInt
     backend_bytes_written := next_backend_bytes_written
     streams_completed := next_streams_completed
@@ -184,15 +205,16 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
         ("backend_bytes_written", backend_bytes_written),
         ("streams_completed", streams_completed),
       ),
-      Some("update_ctrs"),
+      Some(printInfo + " " + "update_ctrs"),
       oneline=true,
       logger=logger
     )
   }
 
   dest_info_queue.io.deq.ready := mem_write_fire.fire(dest_info_queue.io.deq.valid) && is_done_writing
+  io.custom_write_value.ready := mem_write_fire.fire() && is_done_writing
   // TODO: any comb loop here (io.out.valid -> comb -> io.out.ready -> ss comb -> io.out.valid)?
-  shiftstream.io.out.ready := mem_write_fire.fire(shiftstream.io.out.valid) && (in_s_write_cmpflag || !end_of_stream)
+  shiftstream.io.out.ready := mem_write_fire.fire(shiftstream.io.out.valid) && ((in_s_write_cmpflag && custom_value_valid) || !end_of_stream)
 
   io.bufs_completed := streams_completed
   io.no_writes_inflight := io.l2io.no_memops_inflight
