@@ -30,7 +30,6 @@ object WriteOnCompletion extends Enumeration {
 }
 import WriteOnCompletion._
 
-// TODO: Check logic for the custom_val and variation
 class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4, val writeCmpFlag: WriteOnCompletion = WriteOnCompletion.BOOL, printInfo: String = "", val logger: Logger = DefaultLogger)(implicit p: Parameters, val hp: L2MemHelperParams)
   extends Module
   with MemoryOpConstants
@@ -165,7 +164,8 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
     }
   }
   val in_s_write_cmpflag = if (writeCmpFlag != WriteOnCompletion.DISABLED) (state === s_write_cmpflag) else false.B // could be true.B when !end_of_stream is true.B (this should take prio)
-  val is_done_writing = if (writeCmpFlag != WriteOnCompletion.DISABLED) (in_s_write_cmpflag && custom_value_valid) else end_of_stream
+  val ready_to_write_custom = in_s_write_cmpflag && custom_value_valid
+  val is_done_writing = if (writeCmpFlag != WriteOnCompletion.DISABLED) ready_to_write_custom else end_of_stream
 
   val mem_write_fire = DecoupledHelper(
     io.l2io.req.ready,
@@ -173,7 +173,7 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
     shiftstream.io.out.valid,
   )
 
-  io.l2io.req.valid := mem_write_fire.fire(io.l2io.req.ready) && (has_bytes_to_write || (in_s_write_cmpflag && custom_value_valid))
+  io.l2io.req.valid := mem_write_fire.fire(io.l2io.req.ready) && (has_bytes_to_write || ready_to_write_custom)
   io.l2io.req.bits.size := Mux(in_s_write_cmpflag,                                 3.U,          bytes_to_write_log2)
   io.l2io.req.bits.addr := Mux(in_s_write_cmpflag, dest_info_queue.io.deq.bits.cmpflag,      backend_next_write_addr)
   io.l2io.req.bits.data := Mux(in_s_write_cmpflag,                   custom_value_bits, shiftstream.io.out.bits.data)
@@ -216,7 +216,7 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
   dest_info_queue.io.deq.ready := mem_write_fire.fire(dest_info_queue.io.deq.valid) && is_done_writing
   io.custom_write_value.ready := mem_write_fire.fire() && is_done_writing
   // TODO: any comb loop here (io.out.valid -> comb -> io.out.ready -> ss comb -> io.out.valid)?
-  shiftstream.io.out.ready := mem_write_fire.fire(shiftstream.io.out.valid) && ((in_s_write_cmpflag && custom_value_valid) || !end_of_stream)
+  shiftstream.io.out.ready := mem_write_fire.fire(shiftstream.io.out.valid) && (ready_to_write_custom || !end_of_stream)
 
   io.bufs_completed := streams_completed
   io.no_writes_inflight := io.l2io.no_memops_inflight
