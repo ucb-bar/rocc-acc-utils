@@ -9,8 +9,6 @@ import org.chipsalliance.cde.config.{Parameters}
 import freechips.rocketchip.util.{DecoupledHelper}
 import freechips.rocketchip.rocket.constants.{MemoryOpConstants}
 import roccaccutils.logger._
-import midas.targetutils.{BRAMQueue}
-import midas.targetutils.xdc.{RAMStyleHint, RAMStyles}
 
 class MemLoaderConsumerBundle(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val user_consumed_bytes = Input(UInt((BUS_SZ_BYTES_LG2UP + 1).W)) // amt of bytes read (comb. related to available_output_bytes)
@@ -61,7 +59,7 @@ class MemLoader(metadataQueueDepth: Int = 10, dataQueueDepth: Int = 16*4, logger
   val words_to_load_minus_one = words_to_load - 1.U
 
   LogUtils.logHexItems(
-    io.src_info.fire(),
+    io.src_info.fire,
     Seq(
       ("base_addr_bytes", base_addr_bytes),
       ("base_len", base_len),
@@ -111,7 +109,7 @@ class MemLoader(metadataQueueDepth: Int = 10, dataQueueDepth: Int = 16*4, logger
   io.l2io.req.bits.data := 0.U
 
   LogUtils.logHexItems(
-    load_info_queue.io.deq.fire(),
+    load_info_queue.io.deq.fire,
     Seq(
       ("start_byte", load_info_queue.io.deq.bits.start_byte),
       ("end_byte", load_info_queue.io.deq.bits.end_byte),
@@ -135,18 +133,13 @@ class MemLoader(metadataQueueDepth: Int = 10, dataQueueDepth: Int = 16*4, logger
   aligner.io.in.bits.last := load_info_queue.io.deq.bits.last
   aligner.io.in.bits.keep := (BUS_BYTE_MASK >> (BUS_SZ_BYTES.U - load_info_queue.io.deq.bits.end_byte)) & (BUS_BYTE_MASK << load_info_queue.io.deq.bits.start_byte)
 
-  // store aligned data
-  val aligned_data_queue = Module((new BRAMQueue(dataQueueDepth)) {new StreamChannel(BUS_SZ_BITS)})
-  RAMStyleHint(aligned_data_queue.fq.ram, RAMStyles.ULTRA)
-  aligned_data_queue.io.enq <> aligner.io.out
-
   // read out data, shifting based on user input
-  val shiftstream = Module(new StreamShifter(BUS_SZ_BITS, 3*BUS_SZ_BITS))
-  shiftstream.io.in.valid := aligned_data_queue.io.deq.valid
-  aligned_data_queue.io.deq.ready := shiftstream.io.in.ready
-  shiftstream.io.in.bits.data := aligned_data_queue.io.deq.bits.data
-  shiftstream.io.in.bits.keep := aligned_data_queue.io.deq.bits.keep
-  shiftstream.io.in.bits.last := aligned_data_queue.io.deq.bits.last
+  val shiftstream = Module(new StreamShifter(BUS_SZ_BITS, dataQueueDepth))
+  shiftstream.io.in.valid := aligner.io.out.valid
+  aligner.io.out.ready := shiftstream.io.in.ready
+  shiftstream.io.in.bits.data := aligner.io.out.bits.data
+  shiftstream.io.in.bits.keep := aligner.io.out.bits.keep
+  shiftstream.io.in.bits.last := aligner.io.out.bits.last
 
   shiftstream.io.out.bits.read_bytes := io.consumer.user_consumed_bytes
   io.consumer.available_output_bytes := shiftstream.io.out.bits.bytes_avail

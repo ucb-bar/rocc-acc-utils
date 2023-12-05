@@ -8,22 +8,14 @@ import chisel3.util._
 import org.chipsalliance.cde.config.{Parameters, Config}
 import freechips.rocketchip.unittest.{UnitTest, UnitTests}
 import freechips.rocketchip.system.{BaseConfig}
+import freechips.rocketchip.util.{DecoupledHelper}
+import midas.targetutils.{FireSimQueueHelper}
+import roccaccutils.logger._
 
-/**
- * Modified ring buffer with the following properties:
- *   - Shifts a StreamChannel's worth of data based on 'read_bytes' output
- *   - Can only shift one stream at a time (i.e. must wait until all bytes in a stream are read or
- *     'done_reading' is set and clears it)
- *   - Can only enqueue into buffer when there is 'maxInWidthBits' avail. in the underlying buffer
- *     (must be able to put the entire stream into the buffer)
- */
-// TODO: add 'done_reading' to clear buffer and start new stream
-class StreamShifter(maxInWidthBits: Int, capacityBytes: Int) extends Module {
+class StreamShifter(maxInWidthBits: Int, queueDepths: Int) extends Module {
   val w = maxInWidthBits
   val wB = maxInWidthBits / 8
   val wL2Up = log2Up(maxInWidthBits) + 1
-
-  require(wB <= capacityBytes) // recommended that capacityBytes >>> wB
 
   val io = IO(new Bundle {
     val in = Flipped(Decoupled(new StreamChannel(w)))
@@ -46,115 +38,137 @@ class StreamShifter(maxInWidthBits: Int, capacityBytes: Int) extends Module {
     assert(PopCount(io.in.bits.keep + 1.U) <= 1.U, "in.keep bits must be aligned (i.e. like 0xFF)")
   }
 
-  // storage elements
-  val mem = RegInit(VecInit(Seq.fill(capacityBytes)(0.U(8.W))))
-  val head = RegInit(0.U((log2Ceil(capacityBytes)).W))
-  val tail = RegInit(0.U((log2Ceil(capacityBytes)).W))
-  val wrapBitHead = RegInit(false.B)
-  val wrapBitTail = RegInit(false.B)
-  val done_enq = RegInit(false.B)
+  LogUtils.logHexItems(
+    io.in.fire,
+    Seq(
+      ("last", io.in.bits.last),
+      ("keep", io.in.bits.keep),
+      ("data", io.in.bits.data),
+    ),
+    Some(":SS:IN:"),
+    oneline=true
+  )
 
-  // wrap signal
-  val wrap = (capacityBytes - 1).U
+  LogUtils.logHexItems(
+    io.out.fire(),
+    Seq(
+      ("last", io.out.bits.last),
+      ("bytes_avail", io.out.bits.bytes_avail),
+      ("read_bytes", io.out.bits.read_bytes),
+      ("data", io.out.bits.data),
+    ),
+    Some(":SS:OUT:"),
+    oneline=true
+  )
 
-  // full and empty conditions
-  val full = WireDefault(false.B)
-  val empty = WireDefault(false.B)
+  val write_start_index = RegInit(0.U(wL2Up.W))
 
-  // count related vars
-  val count = WireDefault(0.U((log2Ceil(capacityBytes) + 1).W))
-  when (wrapBitHead === wrapBitTail) {
-    count := head - tail
-  } .otherwise {
-    count := (capacityBytes.U - tail) +& head
+  class ByteBundle extends Bundle {
+    val byte = UInt(8.W)
+    val last = Bool()
   }
-  val space_avail = capacityBytes.U - count
-  val one_beat_finish = (count <= wB.U)
-  // must be able to enq. max bytes
-  val can_enq = space_avail >= wB.U
-  //printf("Count:%d SpaceAvail:%d OBF:%d CanEnq:%d Empty:%d Full:%d\n",
-  //  count, space_avail, one_beat_finish, can_enq, empty, full)
-  //printf("Head:%d Tail:%d\n", head, tail)
-
-  when (head === tail) {
-    when (wrapBitHead === wrapBitTail) {
-      empty := true.B
-    }.otherwise {
-      full := true.B
-    }
-  }
-
-  def updatePtrAndWrapTracker(ptr: UInt, add: UInt, wrap_tracker: Bool): (UInt, Bool) = {
-    ((ptr +& add) % capacityBytes.U, Mux(ptr +& add >= capacityBytes.U, !wrap_tracker, wrap_tracker))
-  }
-  def updatePtr(ptr: UInt, add: UInt): UInt = {
-    val (new_ptr, _) = updatePtrAndWrapTracker(ptr, add, false.B) // tracker unused
-    new_ptr
-  }
-
-  // write operation
-  when (io.in.fire) {
-    for (i <- 0 until wB) {
-      when (io.in.bits.keep(i) === 1.U) {
-        mem(updatePtr(head, i.U)) := io.in.bits.data((8*(i+1))-1, 8*i)
-      }
-    }
-
-    //printf("Updating mem:\n")
-    //for (i <- 0 until wB) {
-    //  when (io.in.bits.keep(i) === 1.U) {
-    //    printf("mem[%d] : %x\n",
-    //      updatePtr(head, i.U),
-    //      io.in.bits.data((8*(i+1))-1, 8*i))
-    //  }
-    //}
-
-    val (hWire, wbhWire) = updatePtrAndWrapTracker(head, PopCount(io.in.bits.keep), wrapBitHead)
-    dontTouch(wbhWire)
-    head := hWire
-    wrapBitHead := wbhWire
-  }
-
-  done_enq := Mux(io.in.fire, io.in.bits.last, Mux(empty, false.B, done_enq))
-
-  // read operation
-  val out_data = Wire(Vec(wB, UInt(8.W)))
+  val shift_queues_enq = Wire(Vec(wB, new DecoupledIO(new ByteBundle)))
+  val shift_queues_deq = VecInit((0 until wB).map(i => FireSimQueueHelper.makeDeqIO(shift_queues_enq(i), queueDepths, isFireSim=true)))
+  // override further down
   for (i <- 0 until wB) {
-    out_data(i) := mem(updatePtr(tail, i.U))
-  }
-  io.out.bits.data := Cat((0 until wB).map(out_data(_)).reverse)
-  io.out.bits.last := done_enq && one_beat_finish
-  io.out.bits.bytes_avail := Mux(one_beat_finish, count, wB.U)
-
-  when (io.out.fire()) {
-    //printf("Reading mem:\n")
-    //for (i <- 0 until wB) {
-    //  printf("%x : mem[%d]\n",
-    //    mem(updatePtr(tail, i.U)),
-    //    updatePtr(tail, i.U))
-    //}
-
-    val (tWire, wbtWire) = updatePtrAndWrapTracker(tail, io.out.bits.read_bytes, wrapBitTail)
-    tail := tWire
-    wrapBitTail := wbtWire
+    shift_queues_enq(i).valid := false.B
+    shift_queues_enq(i).bits := DontCare
+    shift_queues_deq(i).ready := false.B
   }
 
-  io.in.ready := !full && !done_enq && can_enq
-  io.out.valid := !empty
+  val len_to_write = PopCount(io.in.bits.keep)
 
-  when (io.in.fire) {
-    printf("SSIN: Last:%d Keep:%x Data:%x\n",
-      io.in.bits.last,
-      io.in.bits.keep,
-      io.in.bits.data)
+  for (i <- 0 until wB) {
+    val remapindex = (write_start_index +& i.U) % wB.U
+    shift_queues_enq(remapindex).bits.byte := io.in.bits.data >> (i * 8)
+    shift_queues_enq(remapindex).bits.last := io.in.bits.last && ((i.U +& 1.U) === len_to_write) // only mark last byte
   }
 
-  when (io.out.fire()) {
-    printf("SSOUT: Last:%d BA:%d RB:%d Data:%x\n",
-      io.out.bits.last,
-      io.out.bits.bytes_avail,
-      io.out.bits.read_bytes,
-      io.out.bits.data)
+  val idata = Seq.fill(wB)("(%d:%d:0x%x,%d)").mkString(" ")
+  val idataVals = (0 until wB).map(i => Seq(i.U, shift_queues_enq(i).valid, shift_queues_enq(i).bits.byte, shift_queues_enq(i).bits.last)).flatten
+  DefaultLogger.logInfo("queue.enq: " + idata + "\n", idataVals:_*)
+
+  val wrap_len_index_wide = (write_start_index +& len_to_write)
+  val wrap_len_index_end = (wrap_len_index_wide % wB.U)
+  val wrapped = (wrap_len_index_wide >= wB.U)
+
+  val all_queues_ready = shift_queues_enq.map(_.ready).reduce(_ && _)
+
+  io.in.ready := all_queues_ready
+  when (io.in.valid && all_queues_ready) {
+    write_start_index := wrap_len_index_end
+  }
+
+  for (i <- 0 until wB) {
+    val i_gte_start = (i.U >= write_start_index)
+    val i_lt_end = (i.U < wrap_len_index_end)
+    val use_this_queue = Mux(wrapped, i_gte_start || i_lt_end, i_gte_start && i_lt_end)
+    shift_queues_enq(i).valid := use_this_queue && io.in.valid && all_queues_ready
+  }
+
+  // ----------------------------------
+
+  val read_start_index = RegInit(0.U(wL2Up.W))
+
+  val remapVecLast = Wire(Vec(wB, Bool()))
+  val remapVecData = Wire(Vec(wB, UInt(8.W)))
+  val remapVecValids = Wire(Vec(wB, Bool()))
+  val remapVecReadys = Wire(Vec(wB, Bool()))
+
+  for (i <- 0 until wB) {
+    val remapindex = (i.U +& read_start_index) % wB.U
+    remapVecData(i) := shift_queues_deq(remapindex).bits.byte
+    remapVecLast(i) := shift_queues_deq(remapindex).bits.last
+    remapVecValids(i) := shift_queues_deq(remapindex).valid
+    shift_queues_deq(remapindex).ready := remapVecReadys(i)
+  }
+
+  val data = Seq.fill(wB)("(%d:%d:0x%x,%d)").mkString(" ")
+  val dataVals = (0 until wB).map(i => Seq(i.U, shift_queues_deq(i).valid, shift_queues_deq(i).bits.byte, shift_queues_deq(i).bits.last)).flatten
+  DefaultLogger.logInfo("queue.deq: " + data + "\n", dataVals:_*)
+
+  val rdata = Seq.fill(wB)("(%d:%d:0x%x,%d)").mkString(" ")
+  val rdataVals = (0 until wB).map(i => Seq(i.U, remapVecValids(i), remapVecData(i), remapVecLast(i))).flatten
+  DefaultLogger.logInfo("remapVecs: " + rdata + "\n", rdataVals:_*)
+
+  val valid_lasts = remapVecValids.zip(remapVecLast).map{case (v, l) => v && l}
+  val has_last_byte = valid_lasts.reduce(_ || _)
+  val count_valids_all = remapVecValids.map(_.asUInt).reduce(_ +& _)
+  val count_valids_upper_bound_inc = PriorityEncoder(valid_lasts)
+  val count_valids_bounded = remapVecValids.zipWithIndex.map{case (v, i) => Mux(i.U <= count_valids_upper_bound_inc, v, false.B)}.map(_.asUInt).reduce(_ +& _)
+  val count_valids = Mux(has_last_byte,
+    count_valids_bounded,
+    count_valids_all
+  )
+
+  LogUtils.logHexItems(
+    io.out.fire(),
+    Seq(
+      ("has_last_byte", has_last_byte),
+      ("count_valids_all", count_valids_all),
+      ("count_valids_upper_bound_inc", count_valids_upper_bound_inc),
+      ("count_valids_bounded", count_valids_bounded),
+    ),
+    oneline=true,
+  )
+
+  io.out.bits.bytes_avail := count_valids
+  io.out.bits.data := Cat(remapVecData.reverse)
+  io.out.bits.last := has_last_byte
+
+  val read_fire = DecoupledHelper(
+    io.out.ready,
+    remapVecValids.reduce(_ || _)
+  )
+
+  io.out.valid := read_fire.fire(io.out.ready)
+
+  for (i <- 0 until wB) {
+    remapVecReadys(i) := (i.U < io.out.bits.read_bytes) && read_fire.fire()
+  }
+
+  when (read_fire.fire()) {
+    read_start_index := (read_start_index +& io.out.bits.read_bytes) % wB.U
   }
 }
 
@@ -206,11 +220,11 @@ class ShiftStreamTest extends UnitTest {
   val sending = RegInit(false.B)
   val receiving = RegInit(false.B)
 
-  val ss = Module(new StreamShifter(streamBits, 2 * (streamBits / 8)))
+  val ss = Module(new StreamShifter(streamBits, 10))
 
   val (inIdx, inDone) = Counter(ss.io.in.fire, inData.size)
   val (outIdx, outDone) = Counter(ss.io.out.fire(), outData.size)
-  printf("inIdx:%d, outIdx: %d outBytesAvail:%d\n", inIdx, outIdx, outBytesAvail(outIdx))
+  DefaultLogger.logInfo("inIdx:%d, outIdx: %d outBytesAvail:%d\n", inIdx, outIdx, outBytesAvail(outIdx))
 
   ss.io.in.valid := sending
   ss.io.in.bits.data := inData(inIdx)
@@ -229,8 +243,8 @@ class ShiftStreamTest extends UnitTest {
 
   io.finished := started && !sending && !receiving
 
-  def compareData(a: UInt, b: UInt, bytes_read: UInt) = {
-    val bitmask = (1.U << (bytes_read * 8.U)) - 1.U
+  def compareData(a: UInt, b: UInt, read_bytes: UInt) = {
+    val bitmask = (1.U << (read_bytes * 8.U)) - 1.U
     (a & bitmask) === (b & bitmask)
   }
 
@@ -240,7 +254,7 @@ class ShiftStreamTest extends UnitTest {
     ("last", ss.io.out.bits.last === outLast(outIdx)),
   )
   when (ss.io.out.fire()) {
-    printf("TEST OUT: Last:%d BA:%d RB:%d Data:%x\n",
+    DefaultLogger.logInfo("TEST OUT: Last:%d BA:%d RB:%d Data:%x\n",
       ss.io.out.bits.last,
       ss.io.out.bits.bytes_avail,
       ss.io.out.bits.read_bytes,

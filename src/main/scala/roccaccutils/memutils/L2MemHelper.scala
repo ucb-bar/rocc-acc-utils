@@ -80,22 +80,10 @@ class L2MemHelperModule(outer: L2MemHelper, tlbConfig: TLBConfig, printInfo: Str
   val (dmem, edge) = outer.masterNode.out.head
 
   val request_input = Wire(Decoupled(new L2ReqInternal))
-  if (!queueRequests) {
-    request_input <> io.userif.req
-  } else {
-    val requestQueue = Module(new Queue(new L2ReqInternal, 4))
-    request_input <> requestQueue.io.deq
-    requestQueue.io.enq <> io.userif.req
-  }
+  request_input <> Queue(io.userif.req, (if (queueRequests) 4 else 0))
 
   val response_output = Wire(Decoupled(new L2RespInternal))
-  if (!queueResponses) {
-    io.userif.resp <> response_output
-  } else {
-    val responseQueue = Module(new Queue(new L2RespInternal, 4))
-    responseQueue.io.enq <> response_output
-    io.userif.resp <> responseQueue.io.deq
-  }
+  io.userif.resp <> Queue(response_output, (if (queueResponses) 4 else 0))
 
   val status = Reg(new MStatus)
   when (io.status.valid) {

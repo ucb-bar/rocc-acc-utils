@@ -10,8 +10,6 @@ import freechips.rocketchip.rocket.{TLBConfig}
 import freechips.rocketchip.util.{DecoupledHelper}
 import freechips.rocketchip.rocket.constants.{MemoryOpConstants}
 import roccaccutils.logger._
-import midas.targetutils.{BRAMQueue}
-import midas.targetutils.xdc.{RAMStyleHint, RAMStyles}
 
 class WriterBundle(implicit val hp: L2MemHelperParams) extends Bundle with HasL2MemHelperParams {
   val data = UInt(BUS_SZ_BITS.W)
@@ -47,25 +45,21 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
     val no_writes_inflight = Output(Bool())
   })
 
-  val incoming_writes_queue = Module((new BRAMQueue(dataQueueDepth)) {new WriterBundle})
-  RAMStyleHint(incoming_writes_queue.fq.ram, RAMStyles.ULTRA)
-  incoming_writes_queue.io.enq <> io.memwrites_in
-
   LogUtils.logHexItems(
-    incoming_writes_queue.io.enq.fire(),
+    io.memwrites_in.fire,
     Seq(
-      ("data", incoming_writes_queue.io.enq.bits.data),
-      ("validbytes", incoming_writes_queue.io.enq.bits.validbytes),
-      ("EOM", incoming_writes_queue.io.enq.bits.end_of_message),
+      ("data", io.memwrites_in.bits.data),
+      ("validbytes", io.memwrites_in.bits.validbytes),
+      ("EOM", io.memwrites_in.bits.end_of_message),
     ),
-    Some(printInfo + " " + "incoming_writes_queue.enq"),
+    Some(printInfo + " " + "io.memwrites_in"),
     logger=logger)
 
   val dest_info_queue = Module(new Queue(new DstInfo, metadataQueueDepth))
   dest_info_queue.io.enq <> io.dest_info
 
   LogUtils.logHexItems(
-    dest_info_queue.io.enq.fire(),
+    dest_info_queue.io.enq.fire,
     Seq(
       ("op", dest_info_queue.io.enq.bits.op),
       ("cmpflag", dest_info_queue.io.enq.bits.cmpflag),
@@ -75,7 +69,7 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
     logger=logger)
 
   LogUtils.logHexItems(
-    dest_info_queue.io.deq.fire(),
+    dest_info_queue.io.deq.fire,
     Seq(
       ("op", dest_info_queue.io.deq.bits.op),
       ("cmpflag", dest_info_queue.io.deq.bits.cmpflag),
@@ -85,19 +79,19 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
     logger=logger)
 
   // read out data, shifting based on user input
-  val shiftstream = Module(new StreamShifter(BUS_SZ_BITS, 3*BUS_SZ_BITS))
-  shiftstream.io.in.valid := incoming_writes_queue.io.deq.valid
-  incoming_writes_queue.io.deq.ready := shiftstream.io.in.ready
-  shiftstream.io.in.bits.data := incoming_writes_queue.io.deq.bits.data
-  shiftstream.io.in.bits.keep := BUS_BYTE_MASK >> (BUS_SZ_BYTES.U - incoming_writes_queue.io.deq.bits.validbytes)
-  shiftstream.io.in.bits.last := incoming_writes_queue.io.deq.bits.end_of_message
+  val shiftstream = Module(new StreamShifter(BUS_SZ_BITS, dataQueueDepth))
+  shiftstream.io.in.valid := io.memwrites_in.valid
+  io.memwrites_in.ready := shiftstream.io.in.ready
+  shiftstream.io.in.bits.data := io.memwrites_in.bits.data
+  shiftstream.io.in.bits.keep := BUS_BYTE_MASK >> (BUS_SZ_BYTES.U - io.memwrites_in.bits.validbytes)
+  shiftstream.io.in.bits.last := io.memwrites_in.bits.end_of_message
 
   LogUtils.logHexItems(
-    shiftstream.io.in.fire(),
+    shiftstream.io.in.fire,
     Seq(
       ("data", shiftstream.io.in.bits.data),
       ("keep", shiftstream.io.in.bits.keep),
-      ("validbytes", incoming_writes_queue.io.deq.bits.validbytes),
+      ("validbytes", io.memwrites_in.bits.validbytes),
       ("last", shiftstream.io.in.bits.last),
     ),
     Some(printInfo + " " + "shiftstream.in"),
@@ -153,12 +147,12 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
   val state = RegInit(s_write_stream)
   switch (state) {
     is (s_write_stream) {
-      when (io.l2io.req.fire() && end_of_stream) {
+      when (io.l2io.req.fire && end_of_stream) {
         state := s_write_cmpflag
       }
     }
     is (s_write_cmpflag) {
-      when (io.l2io.req.fire() && custom_value_valid) {
+      when (io.l2io.req.fire && custom_value_valid) {
         state := s_write_stream
       }
     }
@@ -181,7 +175,7 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
   io.l2io.resp.ready := true.B // sync any write resp
 
   LogUtils.logHexItems(
-    io.l2io.req.fire(),
+    io.l2io.req.fire,
     Seq(
       ("EOS", end_of_stream),
       ("has_bytes_to_write", has_bytes_to_write),
@@ -193,7 +187,7 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
 
   val streams_completed = RegInit(0.U(64.W))
 
-  when (io.l2io.req.fire()) {
+  when (io.l2io.req.fire) {
     val next_backend_bytes_written = Mux(in_s_write_cmpflag, 0.U, Mux(end_of_stream, 0.U, pre_next_backend_bytes_written))
     val next_streams_completed = streams_completed +& is_done_writing.asUInt
     backend_bytes_written := next_backend_bytes_written
