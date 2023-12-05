@@ -83,14 +83,14 @@ class MemWriter(val metadataQueueDepth: Int = 10, val dataQueueDepth: Int = 16*4
   shiftstream.io.in.valid := io.memwrites_in.valid
   io.memwrites_in.ready := shiftstream.io.in.ready
   shiftstream.io.in.bits.data := io.memwrites_in.bits.data
-  shiftstream.io.in.bits.keep := BUS_BYTE_MASK >> (BUS_SZ_BYTES.U - io.memwrites_in.bits.validbytes)
+  shiftstream.io.in.bits.numbytes := io.memwrites_in.bits.validbytes
   shiftstream.io.in.bits.last := io.memwrites_in.bits.end_of_message
 
   LogUtils.logHexItems(
     shiftstream.io.in.fire,
     Seq(
       ("data", shiftstream.io.in.bits.data),
-      ("keep", shiftstream.io.in.bits.keep),
+      ("numbytes", shiftstream.io.in.bits.numbytes),
       ("validbytes", io.memwrites_in.bits.validbytes),
       ("last", shiftstream.io.in.bits.last),
     ),

@@ -119,27 +119,20 @@ class MemLoader(metadataQueueDepth: Int = 10, dataQueueDepth: Int = 16*4, logger
     oneline=true,
     logger=logger)
 
+  // read out data, shifting based on user input
+  val shiftstream = Module(new StreamShifter(BUS_SZ_BITS, dataQueueDepth))
+
   val resp_fire = DecoupledHelper(
     io.l2io.resp.valid,
-    load_info_queue.io.deq.valid
+    load_info_queue.io.deq.valid,
+    shiftstream.io.in.ready
   )
   load_info_queue.io.deq.ready := resp_fire.fire(load_info_queue.io.deq.valid)
   io.l2io.resp.ready := resp_fire.fire(io.l2io.resp.valid)
-
-  // align data
-  val aligner = Module(new Aligner(BUS_SZ_BITS))
-  aligner.io.in.valid := resp_fire.fire()
-  aligner.io.in.bits.data := io.l2io.resp.bits.data
-  aligner.io.in.bits.last := load_info_queue.io.deq.bits.last
-  aligner.io.in.bits.keep := (BUS_BYTE_MASK >> (BUS_SZ_BYTES.U - load_info_queue.io.deq.bits.end_byte)) & (BUS_BYTE_MASK << load_info_queue.io.deq.bits.start_byte)
-
-  // read out data, shifting based on user input
-  val shiftstream = Module(new StreamShifter(BUS_SZ_BITS, dataQueueDepth))
-  shiftstream.io.in.valid := aligner.io.out.valid
-  aligner.io.out.ready := shiftstream.io.in.ready
-  shiftstream.io.in.bits.data := aligner.io.out.bits.data
-  shiftstream.io.in.bits.keep := aligner.io.out.bits.keep
-  shiftstream.io.in.bits.last := aligner.io.out.bits.last
+  shiftstream.io.in.valid := resp_fire.fire(shiftstream.io.in.ready)
+  shiftstream.io.in.bits.data := io.l2io.resp.bits.data >> (load_info_queue.io.deq.bits.start_byte << 3)
+  shiftstream.io.in.bits.numbytes := load_info_queue.io.deq.bits.end_byte - load_info_queue.io.deq.bits.start_byte
+  shiftstream.io.in.bits.last := load_info_queue.io.deq.bits.last
 
   shiftstream.io.out.bits.read_bytes := io.consumer.user_consumed_bytes
   io.consumer.available_output_bytes := shiftstream.io.out.bits.bytes_avail

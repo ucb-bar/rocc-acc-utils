@@ -12,10 +12,9 @@ import freechips.rocketchip.util.{DecoupledHelper}
 import midas.targetutils.{FireSimQueueHelper}
 import roccaccutils.logger._
 
-class StreamShifter(maxInWidthBits: Int, queueDepths: Int) extends Module {
-  val w = maxInWidthBits
-  val wB = maxInWidthBits / 8
-  val wL2Up = log2Up(maxInWidthBits) + 1
+class StreamShifter(w: Int, queueDepths: Int) extends Module {
+  val wB = w / 8
+  val wL2Up = log2Up(w) + 1
 
   val io = IO(new Bundle {
     val in = Flipped(Decoupled(new StreamChannel(w)))
@@ -34,15 +33,11 @@ class StreamShifter(maxInWidthBits: Int, queueDepths: Int) extends Module {
     }
   })
 
-  when (io.in.fire) {
-    assert(PopCount(io.in.bits.keep + 1.U) <= 1.U, "in.keep bits must be aligned (i.e. like 0xFF)")
-  }
-
   LogUtils.logHexItems(
     io.in.fire,
     Seq(
       ("last", io.in.bits.last),
-      ("keep", io.in.bits.keep),
+      ("numbytes", io.in.bits.numbytes),
       ("data", io.in.bits.data),
     ),
     Some(":SS:IN:"),
@@ -68,7 +63,7 @@ class StreamShifter(maxInWidthBits: Int, queueDepths: Int) extends Module {
     val last = Bool()
   }
   val shift_queues_enq = Wire(Vec(wB, new DecoupledIO(new ByteBundle)))
-  val shift_queues_deq = VecInit((0 until wB).map(i => FireSimQueueHelper.makeDeqIO(shift_queues_enq(i), queueDepths, isFireSim=true)))
+  val shift_queues_deq = VecInit((0 until wB).map(i => FireSimQueueHelper.makeDeqIO(shift_queues_enq(i), queueDepths, isFireSim=false)))
   // override further down
   for (i <- 0 until wB) {
     shift_queues_enq(i).valid := false.B
@@ -76,7 +71,7 @@ class StreamShifter(maxInWidthBits: Int, queueDepths: Int) extends Module {
     shift_queues_deq(i).ready := false.B
   }
 
-  val len_to_write = PopCount(io.in.bits.keep)
+  val len_to_write = io.in.bits.numbytes
 
   for (i <- 0 until wB) {
     val remapindex = (write_start_index +& i.U) % wB.U
@@ -228,7 +223,7 @@ class ShiftStreamTest extends UnitTest {
 
   ss.io.in.valid := sending
   ss.io.in.bits.data := inData(inIdx)
-  ss.io.in.bits.keep := inKeep(inIdx)
+  ss.io.in.bits.numbytes := PopCount(inKeep(inIdx))
   ss.io.in.bits.last := inLast(inIdx)
   ss.io.out.ready := receiving
   ss.io.out.bits.read_bytes := outReadBytes(outIdx)

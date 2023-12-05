@@ -6,10 +6,12 @@ import chisel3._
 import chisel3.util._
 
 // These classes originated in testchipip, but are copied
-// here to reduce dependencies
+// here to reduce dependencies (modified to be numbytes instead of keep - i.e. valid data always aligned to 0th idx)
 class StreamChannel(val w: Int) extends Bundle {
+  val wL2Up = log2Up(w) + 1
+
   val data = UInt(w.W)
-  val keep = UInt((w/8).W)
+  val numbytes = UInt(wL2Up.W)
   val last = Bool()
 }
 
