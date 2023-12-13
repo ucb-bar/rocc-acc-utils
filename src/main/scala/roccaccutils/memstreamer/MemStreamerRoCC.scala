@@ -67,8 +67,6 @@ abstract class MemStreamerRoCCImp(outer: MemStreamerRoCC)(implicit p: Parameters
   memloader.io.src_info <> cmd_router.io.src_info
 
   val memwriter = Module(new MemWriter(metadataQueueDepth=metadataQueueDepth, dataQueueDepth=dataQueueDepth, logger=outer.logger))
-  memwriter.io.custom_write_value.valid := DontCare
-  memwriter.io.custom_write_value.bits := DontCare
 
   outer.l2_memwriter.module.io.userif <> memwriter.io.l2io
 

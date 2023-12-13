@@ -12,6 +12,7 @@ import freechips.rocketchip.util.{DecoupledHelper}
 import midas.targetutils.{FireSimQueueHelper}
 import roccaccutils.logger._
 
+// optimized around max occupancy (want you to input as much data as possible without impacting output stream)
 class StreamShifter(w: Int, queueDepths: Int) extends Module {
   val wB = w / 8
   val wL2Up = log2Up(w) + 1
