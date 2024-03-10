@@ -19,8 +19,8 @@ trait Logger {
   // --------------------------
 
   def trimValName()(implicit valName: ValName): String = {
-    val trimAmt = if (valName.name.startsWith("<local")) 6 else 1
-    "<" + valName.name.substring(trimAmt, valName.name.length)
+    val trimAmt = if (valName.value.startsWith("<local")) 6 else 1
+    "<" + valName.value.substring(trimAmt, valName.value.length)
   }
 
   def logInfoImpl(format: String, args: Bits*)(implicit p: Parameters = Parameters.empty, valName: ValName, withMod: Boolean): Unit = {
