@@ -2,15 +2,23 @@
 
 package roccaccutils
 
+import scala.collection.immutable.{ListMap}
+
 import chisel3._
 
 import org.chipsalliance.cde.config.{Parameters, Field}
+
 import freechips.rocketchip.tile._
 import freechips.rocketchip.rocket.{TLBConfig}
 import freechips.rocketchip.diplomacy._
 import freechips.rocketchip.rocket.constants.MemoryOpConstants
 import freechips.rocketchip.tilelink._
 import freechips.rocketchip.subsystem.{SystemBusKey}
+import freechips.rocketchip.subsystem.{CacheBlockBytes}
+import freechips.rocketchip.resources.{DiplomacyUtils}
+
+import testchipip.soc.{BankedScratchpadParams}
+
 import roccaccutils.logger._
 
 abstract class MemStreamerAccel(opcodes: OpcodeSet)(implicit p: Parameters)
@@ -24,6 +32,7 @@ abstract class MemStreamerAccel(opcodes: OpcodeSet)(implicit p: Parameters)
   val tlbConfig: TLBConfig
   val xbarBetweenMem: Boolean
   val logger: Logger
+  val spad: Option[BankedScratchpadParams]
 
   // --------------------------
 
@@ -31,11 +40,53 @@ abstract class MemStreamerAccel(opcodes: OpcodeSet)(implicit p: Parameters)
 
   val roccTLNode = if (xbarBetweenMem) atlNode else tlNode
 
+  val xbar = LazyModule(new TLXbar)
+
   val l2_memloader =     LazyModule(new L2MemHelper(tlbConfig, printInfo="[memloader]", numOutstandingReqs=32, logger=logger))
-  roccTLNode := TLWidthWidget(BUS_SZ_BYTES) := TLBuffer.chainNode(1) := l2_memloader.masterNode
+  xbar.node := TLBuffer.chainNode(1) := l2_memloader.masterNode
 
   val l2_memwriter =     LazyModule(new L2MemHelper(tlbConfig, printInfo="[memwriter]", numOutstandingReqs=32, logger=logger))
-  roccTLNode := TLWidthWidget(BUS_SZ_BYTES) := TLBuffer.chainNode(1) := l2_memwriter.masterNode
+  xbar.node := TLBuffer.chainNode(1) := l2_memwriter.masterNode
+
+  val busBeatBytes = BUS_SZ_BYTES
+  val intNode = spad match {
+    case Some(BankedScratchpadParams(base, size, _, banks, subbanks, _, _, _, _, _)) => {
+      val spad_xbar = LazyModule(new TLXbar).suggestName("streamer_spad_xbar")
+
+      // input multi-banked globally visible scratchpad
+      val bankStripe = p(CacheBlockBytes)*subbanks
+      val mask = (banks-1)*bankStripe
+      val device = new MemoryDevice {
+        override def describe(resources: ResourceBindings): Description = {
+          Description(describeName("memory", resources), ListMap(
+            "reg"         -> resources.map.filterKeys(DiplomacyUtils.regFilter).flatMap(_._2).map(_.value).toList,
+            "device_type" -> Seq(ResourceString("memory")),
+            "status"      -> Seq(ResourceString("okay"))
+          ))
+        }
+      }
+      (0 until banks).map { b =>
+        val bank = LazyModule(new testchipip.soc.ScratchpadBankNonClockDiplomatic(
+            subbanks,
+            AddressSet(base + bankStripe * b, size - 1 - mask),
+            busBeatBytes,
+            device,
+            BufferParams.default))
+        bank.xbar := TLBuffer(BufferParams.default) := spad_xbar.node
+      }
+
+      // let outer memory come to scratchpad
+      spad_xbar.node := TLBuffer() := TLWidthWidget(busBeatBytes) := stlNode
+      // allow mem. reqs. to go to spad w/o going out to sbus
+      spad_xbar.node := TLWidthWidget(busBeatBytes) := xbar.node
+
+      TLFilter(TLFilter.mSubtract(Seq(AddressSet(base, size-1))))
+    }
+    case None => TLIdentityNode()
+  }
+
+  // let acc mem. reqs come be sent out (filter out all from spad)
+  roccTLNode := intNode := TLWidthWidget(busBeatBytes) := xbar.node
 }
 
 abstract class MemStreamerAccelImp(outer: MemStreamerAccel)(implicit p: Parameters)
